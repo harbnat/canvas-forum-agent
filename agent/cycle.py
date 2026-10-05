@@ -286,7 +286,9 @@ class Agent:
 
         if self.dry_run:
             self.events.log(self.cycle_id, "dry_run", kind=kind, parent_id=parent_id, body=body)
-            return CycleResult("dry_run_would_post", f"{kind} to {parent_id}: {body[:120]}...")
+            target = self.cfg.entry_url(parent_id) if parent_id else "a new thread"
+            return CycleResult("dry_run_would_post",
+                               f"{kind} to {target}\n----- draft -----\n{body}\n-----------------")
 
         if existing is not None:  # previously confirmed never posted; safe to try again
             self.memory.retry_not_posted(key, self.cycle_id)
