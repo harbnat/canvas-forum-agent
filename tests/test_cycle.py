@@ -269,3 +269,16 @@ def test_old_entries_are_context_only(cfg):
     make(cfg, canvas, b).run_cycle()
     ids = [e["id"] for e in b.calls[0]["threads"][0]]
     assert old in ids and fresh in ids
+
+
+def test_min_gap_skips_scheduled_runs(cfg, monkeypatch, capsys):
+    from agent.__main__ import main
+    monkeypatch.setenv("CANVAS_TOKEN", "x" * 20)
+    monkeypatch.setenv("AGENT_STATE_DIR", str(cfg.state_dir))
+    monkeypatch.setenv("AGENT_LOG_DIR", str(cfg.log_dir))
+    mem = Memory(cfg.state_dir / "memory.sqlite3")
+    mem.start_cycle("recent")
+    mem.finish_cycle("recent", "posted", "", failed=False)
+    mem.close()
+    assert main(["run", "--min-gap-hours", "2.5"]) == 0
+    assert "skipped" in capsys.readouterr().out

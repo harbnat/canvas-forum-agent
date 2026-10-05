@@ -36,6 +36,9 @@ def main(argv: list[str] | None = None) -> int:
     run = sub.add_parser("run", help="run one agent cycle")
     run.add_argument("--dry-run", action="store_true", help="decide but never post")
     run.add_argument("--inject-fault", choices=sorted(FAULTS), help="exercise a failure path")
+    run.add_argument("--min-gap-hours", type=float, default=0.0,
+                     help="skip (without running a cycle) if the last real cycle started "
+                          "less than this many hours ago; used by the hourly schedule")
     sub.add_parser("check", help="read-only connectivity check")
     sub.add_parser("status", help="show recent cycles and posts")
     sub.add_parser("evidence", help="print a markdown evidence summary")
@@ -72,6 +75,15 @@ def _dispatch(args, cfg, memory: Memory, events: EventLog) -> int:
         return 0
 
     from .canvas import CanvasClient
+
+    if args.cmd == "run" and args.min_gap_hours > 0:
+        import time
+        last = memory.last_real_cycle_start()
+        if last is not None and time.time() - last < args.min_gap_hours * 3600:
+            mins = (time.time() - last) / 60
+            print(f"skipped: last cycle started {mins:.0f} min ago "
+                  f"(minimum gap {args.min_gap_hours:g}h); waiting for a later trigger")
+            return 0
 
     faults = Faults(getattr(args, "inject_fault", None))
     canvas = CanvasClient(cfg.canvas_base_url, cfg.canvas_token, cfg.course_id, cfg.topic_id,

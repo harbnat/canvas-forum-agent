@@ -15,8 +15,7 @@ would add anything, it stays quiet and logs why.
 
 ## Setup (GitHub Actions: runs in the cloud, no laptop needed)
 
-The workflow `.github/workflows/agent-cycle.yml` runs one cycle **every 3 hours**
-(at :17 past the hour, UTC) on GitHub's servers. The agent's memory (`state/`)
+The workflow `.github/workflows/agent-cycle.yml` runs one cycle **about every 3 hours** on GitHub's servers. The agent's memory (`state/`)
 and logs are saved in the GitHub Actions cache after every run, even failed ones,
 and restored at the start of the next.
 
@@ -52,7 +51,12 @@ an up-to-date `evidence.md` for the write-up.
 homework, also delete the token in Canvas settings.
 
 **Notes**
-- GitHub may start scheduled runs 5–30 minutes late, which is fine for a 3-hour cadence.
+- GitHub's scheduler often delays or silently drops scheduled runs (on day one it ran
+  only 1 of 4). So the workflow is triggered **hourly**, and the agent skips any
+  scheduled start less than 2.5 hours after its last real cycle
+  (`--min-gap-hours 2.5`). A dropped trigger is then covered by the next hourly
+  one. Skipped starts print `skipped: ...` and don't count as cycles. Manual
+  runs are never skipped.
 - Runs never overlap (`concurrency` group), so two cycles can't race on the memory.
 - Each run uses about 1–2 minutes, well within the free private-repo allowance.
 - If the cache were ever evicted, the agent would start with empty memory. It still

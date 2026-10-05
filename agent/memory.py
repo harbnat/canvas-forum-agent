@@ -187,6 +187,13 @@ class Memory:
         else:
             self.set("consecutive_failures", 0)
 
+    def last_real_cycle_start(self) -> float | None:
+        """Start time of the latest cycle that was not a dry run (None if never)."""
+        row = self.db.execute(
+            "SELECT MAX(started_at) FROM cycles WHERE outcome IS NULL "
+            "OR outcome != 'dry_run_would_post'").fetchone()
+        return row[0] if row and row[0] else None
+
     def recent_cycles(self, limit: int = 20) -> list[sqlite3.Row]:
         return list(self.db.execute("SELECT * FROM cycles ORDER BY started_at DESC LIMIT ?",
                                     (limit,)))

@@ -1,4 +1,8 @@
-# Runs one Threadweaver cycle every 3 hours on GitHub's servers.
+# Runs one Threadweaver cycle about every 3 hours on GitHub's servers.
+#
+# GitHub's scheduler often delays or drops scheduled runs, so it is asked to
+# start the workflow every hour and the agent skips any scheduled start that
+# comes less than 2.5 hours after its last real cycle. Manual runs are never skipped.
 #
 # Persistent memory: state/ (SQLite) and logs/ are restored from the Actions
 # cache at the start of each run and saved again at the end, even if the run
@@ -12,7 +16,7 @@ name: agent-cycle
 
 on:
   schedule:
-    - cron: "17 */3 * * *"   # UTC; :17 avoids the top-of-hour scheduling rush
+    - cron: "41 * * * *"   # hourly at :41 UTC (off-peak minute); agent enforces the 2.5h gap
   workflow_dispatch:
     inputs:
       mode:
@@ -71,6 +75,8 @@ jobs:
             run)
               if [ "$FAULT" != "none" ]; then
                 python -m agent run --inject-fault "$FAULT"
+              elif [ "${{ github.event_name }}" = "schedule" ]; then
+                python -m agent run --min-gap-hours 2.5
               else
                 python -m agent run
               fi ;;
