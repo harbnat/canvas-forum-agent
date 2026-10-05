@@ -1,0 +1,3 @@
+# Run one agent cycle every 3 hours, at minute 17 (avoids the top-of-hour rush).
+# Install with:  crontab -e   and paste the line below, fixing the path.
+17 */3 * * * /ABSOLUTE/PATH/TO/canvas-forum-agent/scripts/run_cycle.sh

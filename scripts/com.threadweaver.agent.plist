@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- macOS launchd alternative to cron. Edit the path, then:
+     cp scripts/com.threadweaver.agent.plist ~/Library/LaunchAgents/
+     launchctl load ~/Library/LaunchAgents/com.threadweaver.agent.plist
+     Unload with: launchctl unload ~/Library/LaunchAgents/com.threadweaver.agent.plist -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.threadweaver.agent</string>
+  <key>ProgramArguments</key>
+  <array><string>/ABSOLUTE/PATH/TO/canvas-forum-agent/scripts/run_cycle.sh</string></array>
+  <key>StartInterval</key><integer>10800</integer>
+  <key>RunAtLoad</key><true/>
+</dict>
+</plist>
