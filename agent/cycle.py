@@ -141,7 +141,7 @@ class Agent:
                                "new entries left unseen for next cycle" + notes)
 
         threads, considered = self._build_threads(entries, by_id, new)
-        recent = [r["body"] for r in self.memory.my_posts(limit=10)]
+        recent = self._my_previous_bodies(entries, me)[:10]
         decision = self.brain.decide(threads, considered, recent)
         self.events.log(self.cycle_id, "decision", action=decision.action, style=decision.style,
                         target=decision.target_entry_id, reason=decision.reason,
@@ -175,6 +175,17 @@ class Agent:
             if e["text"]:
                 out.append(e)
         return out
+
+    def _my_previous_bodies(self, entries: list[dict], me: int) -> list[str]:
+        """My earlier posts, newest first: local memory plus what is live on Canvas.
+
+        Including the live copies means a lost memory file cannot make the agent
+        repeat itself.
+        """
+        local = [r["body"] for r in self.memory.my_posts(limit=50)]
+        remote = [e["text"] for e in sorted(entries, key=lambda e: e["id"], reverse=True)
+                  if e.get("user_id") == me]
+        return local + [t for t in remote if t not in local]
 
     def _post_budget(self, entries: list[dict], me: int) -> int:
         hour_ago = self.now() - 3600
@@ -257,7 +268,7 @@ class Agent:
             if already:
                 return done("blocked_by_gate", f"I already replied to entry {parent_id}")
 
-        own_previous = [r["body"] for r in self.memory.my_posts(limit=50)]
+        own_previous = self._my_previous_bodies(list(by_id.values()), me)
         problems = safety.check_body(body, own_previous)
         if problems:
             # Body deliberately not logged: it may be what tripped a secret filter.

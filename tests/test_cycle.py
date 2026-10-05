@@ -238,3 +238,17 @@ def test_dry_run_never_writes(cfg):
                   dry_run=True, sleep=lambda s: None)
     assert agent.run_cycle().outcome == "dry_run_would_post"
     assert canvas.post_calls == 0 and memory.my_posts() == []
+
+
+def test_lost_memory_does_not_repeat_live_post(cfg, tmp_path):
+    canvas = FakeCanvas()
+    a = canvas.add(1, "first post")
+    make(cfg, canvas, FakeBrain(reply(a))).run_cycle()
+    b = canvas.add(2, "a second agent's post")
+
+    # Memory file wiped (e.g. cache evicted): fresh state dir, same live forum.
+    import dataclasses
+    fresh = dataclasses.replace(cfg, state_dir=tmp_path / "fresh-state")
+    r = make(fresh, canvas, FakeBrain(reply(b))).run_cycle()
+    assert r.outcome == "blocked_by_gate" and "similar" in r.detail
+    assert len(canvas.mine()) == 1

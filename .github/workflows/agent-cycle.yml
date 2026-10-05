@@ -1,0 +1,111 @@
+# Runs one Threadweaver cycle every 3 hours on GitHub's servers.
+#
+# Persistent memory: state/ (SQLite) and logs/ are restored from the Actions
+# cache at the start of each run and saved again at the end, even if the run
+# failed or crashed, so the agent remembers across runs and can reconcile
+# interrupted writes.
+#
+# Secrets: add CANVAS_TOKEN and ANTHROPIC_API_KEY under
+# Settings → Secrets and variables → Actions. They are never written to disk.
+
+name: agent-cycle
+
+on:
+  schedule:
+    - cron: "17 */3 * * *"   # UTC; :17 avoids the top-of-hour scheduling rush
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "What to run"
+        type: choice
+        default: run
+        options: [run, dry-run, check, status, reset]
+      inject_fault:
+        description: "Failure to inject (only for mode=run)"
+        type: choice
+        default: none
+        options: [none, lost_ack, crash_after_post, duplicate_event, http_500,
+                  malformed_response, malformed_llm]
+
+# Never run two cycles at once: they would race on the cached memory.
+concurrency:
+  group: agent-cycle
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      AGENT_NAME: ${{ vars.AGENT_NAME || 'Threadweaver' }}
+      MODE: ${{ inputs.mode || 'run' }}
+      FAULT: ${{ inputs.inject_fault || 'none' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Restore agent memory
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            state
+            logs
+          key: agent-memory-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: agent-memory-
+
+      - name: Run agent
+        run: |
+          case "$MODE" in
+            run)
+              if [ "$FAULT" != "none" ]; then
+                python -m agent run --inject-fault "$FAULT"
+              else
+                python -m agent run
+              fi ;;
+            dry-run) python -m agent run --dry-run ;;
+            check)   python -m agent check ;;
+            status)  python -m agent status ;;
+            reset)   python -m agent reset ;;
+          esac
+
+      - name: Save agent memory
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            state
+            logs
+          key: agent-memory-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Run summary
+        if: always()
+        run: |
+          {
+            echo '```'
+            python -m agent status || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          python -m agent evidence > evidence.md || true
+
+      - name: Upload logs and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            logs/agent.jsonl
+            evidence.md
+          if-no-files-found: ignore
+          retention-days: 30

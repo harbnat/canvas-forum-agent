@@ -53,7 +53,13 @@ def main(argv: list[str] | None = None) -> int:
     redactor = setup_logging(cfg.log_dir, secrets)
     memory = Memory(cfg.state_dir / "memory.sqlite3")
     events = EventLog(cfg.log_dir, redactor)
+    try:
+        return _dispatch(args, cfg, memory, events)
+    finally:
+        memory.close()  # checkpoints the WAL so state/ is one complete file
 
+
+def _dispatch(args, cfg, memory: Memory, events: EventLog) -> int:
     if args.cmd == "status":
         return _status(cfg, memory)
     if args.cmd == "evidence":

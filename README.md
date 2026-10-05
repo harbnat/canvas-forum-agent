@@ -13,64 +13,86 @@ would add anything, it stays quiet and logs why.
 
 ---
 
-## Setup
+## Setup (GitHub Actions: runs in the cloud, no laptop needed)
+
+The workflow `.github/workflows/agent-cycle.yml` runs one cycle **every 3 hours**
+(at :17 past the hour, UTC) on GitHub's servers. The agent's memory (`state/`)
+and logs are saved in the GitHub Actions cache after every run, even failed ones,
+and restored at the start of the next.
+
+1. **Get the two keys.**
+   - Canvas: Account → Settings → Approved Integrations → **+ New Access Token**,
+     expiring shortly after the due date.
+   - Claude: https://console.anthropic.com → **API Keys**.
+2. **Store them as repo secrets.** In this repo on GitHub, go to **Settings →
+   Secrets and variables → Actions → New repository secret** and add two secrets:
+   `CANVAS_TOKEN` and `ANTHROPIC_API_KEY`. GitHub encrypts them and hides them in logs.
+3. **Check the connection.** Go to **Actions → agent-cycle → Run workflow**, choose
+   mode `check`, and click Run. Open the run and look at the "Run agent" step for your
+   name and `Parsed control state: RUNNING`.
+4. **Rehearse.** Run the workflow with mode `dry-run`. It decides but never posts.
+5. **Go live.** Run the workflow once with mode `run`. After that, the schedule
+   runs it by itself. Leave it alone; nothing else is needed.
+
+**Watching it:** each run on the **Actions** tab shows a status summary. Its
+**Artifacts** section has `agent-logs-…`, which contains `logs/agent.jsonl` and
+an up-to-date `evidence.md` for the write-up.
+
+**Manual modes** (Actions → agent-cycle → Run workflow):
+
+| mode | does |
+|---|---|
+| `run` | one real cycle; optionally pick an `inject_fault` (see below) |
+| `dry-run` | full cycle, never posts |
+| `check` | read-only connectivity check |
+| `status` | show recent cycles and posts |
+| `reset` | clear the halt flag after investigating repeated failures |
+
+**Stopping it:** Actions → agent-cycle → **⋯ → Disable workflow**. After the
+homework, also delete the token in Canvas settings.
+
+**Notes**
+- GitHub may start scheduled runs 5–30 minutes late, which is fine for a 3-hour cadence.
+- Runs never overlap (`concurrency` group), so two cycles can't race on the memory.
+- Each run uses about 1–2 minutes, well within the free private-repo allowance.
+- If the cache were ever evicted, the agent would start with empty memory. It still
+  reads its own live posts from Canvas, so it won't reply twice to the same entry,
+  exceed the hourly limit, or repeat an earlier post.
+
+## Alternative: run it on your own computer
 
 Requires Python 3.10+ and macOS or Linux.
 
 ```bash
-git clone https://github.com/harbnat/canvas-forum-agent.git
 cd canvas-forum-agent
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements-dev.txt
-cp .env.example .env        # then edit .env (it is gitignored)
-```
-
-Fill in `.env`:
-
-| Variable | What |
-|---|---|
-| `CANVAS_TOKEN` | Your own token: Canvas → Account → Settings → **+ New Access Token**, with an expiry shortly after the due date. |
-| `ANTHROPIC_API_KEY` | Claude API key. |
-| `CANVAS_COURSE_ID` / `CANVAS_TOPIC_ID` | Defaults point at the HW3 forum (`40577` / `448963`). |
-
-Then check the setup, rehearse, and run the tests:
-
-```bash
-./.venv/bin/python -m pytest -q                 # 37 offline tests, no network
-./.venv/bin/python -m agent check               # read-only: who am I, control line, entry count
-./.venv/bin/python -m agent run --dry-run       # full cycle, but never posts
+cp .env.example .env        # then add both keys (.env is gitignored)
+./.venv/bin/python -m pytest -q                 # offline tests, no network
+./.venv/bin/python -m agent check               # read-only check
+./.venv/bin/python -m agent run --dry-run       # never posts
 ./.venv/bin/python -m agent run                 # one real cycle
 ```
 
-### Start the schedule (once; after that it runs by itself)
-
-**cron** (macOS or Linux): `crontab -e`, then add this line with your absolute path:
-
-```
-17 */3 * * * /ABSOLUTE/PATH/TO/canvas-forum-agent/scripts/run_cycle.sh
-```
-
-**launchd** (macOS alternative): see `scripts/com.threadweaver.agent.plist`.
-
-On macOS, if cron can't read the folder, move the repo out of `~/Documents` and
-`~/Desktop`, or give `cron` Full Disk Access. The machine must be awake for runs
-to happen.
-
-### Day-to-day commands
+To schedule it with cron, run this once:
 
 ```bash
-./.venv/bin/python -m agent status     # recent cycles, my posts, failure counter
-./.venv/bin/python -m agent evidence   # markdown summary for the write-up
-./.venv/bin/python -m agent reset      # clear the halt flag after investigating
-crontab -l / crontab -e                # see or stop the schedule
+(crontab -l 2>/dev/null; echo "17 */3 * * * $HOME/canvas-forum-agent/scripts/run_cycle.sh") | crontab -
 ```
 
----
+On macOS you can use launchd instead (`scripts/com.threadweaver.agent.plist`).
+The machine must be awake for runs to happen. Other commands: `python -m agent
+status | evidence | reset`.
+
+Don't run both the local cron job and the GitHub schedule at the same time.
+They would keep separate memories. The live-forum checks still prevent duplicate
+posts, but the evidence would be split across two places.
 
 ## Architecture
 
 ```
- cron (every 3h) ──▶ scripts/run_cycle.sh ──▶ python -m agent run
+ GitHub Actions schedule (every 3h)
+   ──▶ restore state/ from cache ──▶ python -m agent run ──▶ save state/ to cache
                                                    │
    ┌───────────────────────────────────────────────┴──────────────────────────┐
    │ 0. lock file (one cycle at a time) · halted? → exit                        │
@@ -149,10 +171,12 @@ crontab -l / crontab -e                # see or stop the schedule
 
 Each fault fires once, so you see the recovery path in action:
 
+Run these from **Actions → Run workflow** (mode `run` plus an `inject_fault`), or locally:
+
 | Command | What it shows |
 |---|---|
 | `python -m agent run --inject-fault lost_ack` | The POST reaches Canvas, then the response is "lost". The agent finds its own post and does **not** post again. |
-| `python -m agent run --inject-fault crash_after_post` | The process dies right after the POST, before saving. The next `python -m agent run` reconciles the pending action: `recovered earlier post … without reposting`. |
+| `python -m agent run --inject-fault crash_after_post` | The process dies right after the POST, before saving. The next run (scheduled, or start one manually) reconciles the pending action: `recovered earlier post … without reposting`. |
 | `python -m agent run --inject-fault duplicate_event` | The same decision is executed twice. The second is `duplicate_suppressed`. |
 | `python -m agent run --inject-fault http_500` | A synthetic 500 on a read, which is retried with backoff. |
 | `python -m agent run --inject-fault malformed_response` | A garbled (non-JSON) Canvas response, which is retried. |
