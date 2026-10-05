@@ -55,6 +55,7 @@ class Config:
     max_posts_per_cycle: int
     max_consecutive_failures: int
     use_fallbacks: bool
+    max_entry_age_hours: int = 72
 
     @property
     def topic_url(self) -> str:
@@ -90,4 +91,5 @@ def load_config(require_secrets: bool = True) -> Config:
         max_posts_per_cycle=max(min(_int("AGENT_MAX_POSTS_PER_CYCLE", 1), per_hour), 0),
         max_consecutive_failures=max(_int("AGENT_MAX_CONSECUTIVE_FAILURES", 3), 1),
         use_fallbacks=os.environ.get("AGENT_USE_FALLBACKS", "1").strip() != "0",
+        max_entry_age_hours=max(_int("AGENT_MAX_ENTRY_AGE_HOURS", 72), 1),
     )

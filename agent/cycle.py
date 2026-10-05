@@ -27,9 +27,9 @@ log = logging.getLogger(__name__)
 
 POST_ATTEMPTS = 3
 VERIFY_ATTEMPTS = 4
-MAX_THREADS_IN_PROMPT = 8
-MAX_ENTRIES_PER_THREAD = 25
-MAX_CHARS_PER_ENTRY = 1500
+MAX_THREADS_IN_PROMPT = 6
+MAX_ENTRIES_PER_THREAD = 15
+MAX_CHARS_PER_ENTRY = 1200
 
 
 class Paused(Exception):
@@ -127,7 +127,16 @@ class Agent:
             raise Paused(f"control line says {control}; not posting" + notes)
 
         seen = self.memory.seen_ids()
-        new = [e for e in entries if e["id"] not in seen and e.get("user_id") != me]
+        unseen = [e for e in entries if e["id"] not in seen and e.get("user_id") != me]
+        # Old entries are context only: don't revive threads that went quiet days ago.
+        cutoff = self.now() - self.cfg.max_entry_age_hours * 3600
+        stale = [e for e in unseen if (parse_time(e.get("created_at")) or self.now()) < cutoff]
+        if stale:
+            self.memory.mark_seen(stale, me, self.cycle_id)
+            self.events.log(self.cycle_id, "skipped_stale", count=len(stale),
+                            older_than_hours=self.cfg.max_entry_age_hours)
+        stale_ids = {e["id"] for e in stale}
+        new = [e for e in unseen if e["id"] not in stale_ids]
         self.events.log(self.cycle_id, "observed", total_entries=len(entries), new=len(new),
                         new_ids=[e["id"] for e in new])
         if not new:

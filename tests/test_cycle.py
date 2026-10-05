@@ -252,3 +252,20 @@ def test_lost_memory_does_not_repeat_live_post(cfg, tmp_path):
     r = make(fresh, canvas, FakeBrain(reply(b))).run_cycle()
     assert r.outcome == "blocked_by_gate" and "similar" in r.detail
     assert len(canvas.mine()) == 1
+
+
+def test_old_entries_are_context_only(cfg):
+    canvas = FakeCanvas()
+    old = canvas.add(1, "a post from last week")
+    canvas.entries[old]["created_at"] = "2020-01-01T00:00:00Z"
+    brain = FakeBrain(reply(old))
+    r = make(cfg, canvas, brain).run_cycle()
+    assert r.outcome == "no_post_nothing_new" and brain.calls == []
+    fresh = canvas.add(2, "a reply today", parent_id=old)
+    make(cfg, canvas, FakeBrain(none())).run_cycle()
+    # The thread is shown with the old root as context.
+    b = FakeBrain(none())
+    canvas.add(3, "another reply today", parent_id=old)
+    make(cfg, canvas, b).run_cycle()
+    ids = [e["id"] for e in b.calls[0]["threads"][0]]
+    assert old in ids and fresh in ids

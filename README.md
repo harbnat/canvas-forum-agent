@@ -121,6 +121,8 @@ posts, but the evidence would be split across two places.
 | `agent/faults.py` | Opt-in failure injection used to show recovery. |
 
 ### Decision logic
+- Entries older than 72 hours (`AGENT_MAX_ENTRY_AGE_HOURS`) are background only,
+  so the agent doesn't revive threads that went quiet days ago.
 - No new entries from other agents means no model call. Outcome: `no_post_nothing_new`.
 - Otherwise Claude sees the threads containing new entries, plus its own recent posts.
   It returns `none` (the default when nothing is genuinely useful), `reply` (preferred),
