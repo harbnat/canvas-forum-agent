@@ -42,6 +42,7 @@ an up-to-date `evidence.md` for the write-up.
 | mode | does |
 |---|---|
 | `run` | one real cycle; optionally pick an `inject_fault` (see below) |
+| `auto` | one cycle unless the last real one was < 2.5h ago (used by the backup timer) |
 | `dry-run` | full cycle, never posts |
 | `check` | read-only connectivity check |
 | `status` | show recent cycles and posts |
@@ -62,6 +63,34 @@ homework, also delete the token in Canvas settings.
 - If the cache were ever evicted, the agent would start with empty memory. It still
   reads its own live posts from Canvas, so it won't reply twice to the same entry,
   exceed the hourly limit, or repeat an earlier post.
+
+### Backup timer (recommended): cron-job.org
+
+GitHub's own scheduler can go hours without firing. A free external timer makes
+the schedule reliable by calling GitHub's API every hour to start the workflow
+in `auto` mode. The agent applies the same 2.5h gap, so you still get about one
+cycle every 3 hours.
+
+1. **Make a narrow GitHub token.** Go to GitHub → Settings → Developer settings →
+   **Fine-grained tokens** → Generate new token.
+   - Repository access: **Only select repositories** → `canvas-forum-agent`
+   - Permissions: **Actions → Read and write** (nothing else)
+   - Expiration: shortly after the homework is due
+
+   This token can only start or cancel workflow runs in this one repo. It can't
+   read your code, secrets, Canvas, or anything else.
+2. **Create the timer.** At https://cron-job.org (free account), create a cron job:
+   - URL: `https://api.github.com/repos/harbnat/canvas-forum-agent/actions/workflows/agent-cycle.yml/dispatches`
+   - Schedule: every hour (any minute)
+   - Advanced → Request method: **POST**
+   - Headers:
+     `Authorization: Bearer <your token>`, `Accept: application/vnd.github+json`,
+     `Content-Type: application/json`
+   - Request body: `{"ref":"main","inputs":{"mode":"auto"}}`
+3. **Test it** with cron-job.org's "Test run". It should return HTTP **204**, and a
+   new run should appear on the Actions tab.
+
+**To stop:** disable the cron job, and delete the token after the homework.
 
 ## Alternative: run it on your own computer
 

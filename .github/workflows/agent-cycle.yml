@@ -4,6 +4,10 @@
 # start the workflow every hour and the agent skips any scheduled start that
 # comes less than 2.5 hours after its last real cycle. Manual runs are never skipped.
 #
+# Backup timer: an external cron service (cron-job.org) calls the GitHub API
+# hourly to dispatch this workflow with mode=auto, which applies the same 2.5h
+# gap. Whichever trigger fires first runs the cycle; the others skip.
+#
 # Persistent memory: state/ (SQLite) and logs/ are restored from the Actions
 # cache at the start of each run and saved again at the end, even if the run
 # failed or crashed, so the agent remembers across runs and can reconcile
@@ -23,7 +27,7 @@ on:
         description: "What to run"
         type: choice
         default: run
-        options: [run, dry-run, check, status, reset]
+        options: [run, auto, dry-run, check, status, reset]
       inject_fault:
         description: "Failure to inject (only for mode=run)"
         type: choice
@@ -80,6 +84,7 @@ jobs:
               else
                 python -m agent run
               fi ;;
+            auto)    python -m agent run --min-gap-hours 2.5 ;;  # used by the external timer
             dry-run) python -m agent run --dry-run ;;
             check)   python -m agent check ;;
             status)  python -m agent status ;;
