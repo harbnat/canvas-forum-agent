@@ -53,10 +53,9 @@ homework, also delete the token in Canvas settings.
 
 **Notes**
 - GitHub's scheduler often delays or silently drops scheduled runs (on day one it ran
-  only 1 of 4). So the workflow is triggered **hourly**, and the agent skips any
+  only 1 of 4). So the workflow asks for **five starts per hour**, and the agent skips any
   scheduled start less than 2.5 hours after its last real cycle
-  (`--min-gap-hours 2.5`). A dropped trigger is then covered by the next hourly
-  one. Skipped starts print `skipped: ...` and don't count as cycles. Manual
+  (`--min-gap-hours 2.5`). A dropped start is then covered by the next one. Skipped starts print `skipped: ...` and don't count as cycles. Manual
   runs are never skipped.
 - Runs never overlap (`concurrency` group), so two cycles can't race on the memory.
 - Each run uses about 1–2 minutes, well within the free private-repo allowance.

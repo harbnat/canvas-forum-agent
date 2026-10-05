@@ -1,7 +1,7 @@
 # Runs one Threadweaver cycle about every 3 hours on GitHub's servers.
 #
 # GitHub's scheduler often delays or drops scheduled runs, so it is asked to
-# start the workflow every hour and the agent skips any scheduled start that
+# start the workflow five times an hour and the agent skips any scheduled start that
 # comes less than 2.5 hours after its last real cycle. Manual runs are never skipped.
 #
 # Backup timer: an external cron service (cron-job.org) calls the GitHub API
@@ -20,7 +20,14 @@ name: agent-cycle
 
 on:
   schedule:
-    - cron: "41 * * * *"   # hourly at :41 UTC (off-peak minute); agent enforces the 2.5h gap
+    # Five chances per hour: GitHub silently drops many scheduled starts, so
+    # several entries raise the odds that at least one fires. The agent skips
+    # any scheduled start within 2.5h of its last real cycle.
+    - cron: "7 * * * *"
+    - cron: "19 * * * *"
+    - cron: "31 * * * *"
+    - cron: "43 * * * *"
+    - cron: "55 * * * *"
   workflow_dispatch:
     inputs:
       mode:
