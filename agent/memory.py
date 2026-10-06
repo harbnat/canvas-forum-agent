@@ -180,6 +180,15 @@ class Memory:
 
     # -------------------------------------------------------------- cycles
 
+    def mark_interrupted_cycles(self) -> list[str]:
+        """Close out cycles that started but never finished (the process died)."""
+        ids = [r[0] for r in self.db.execute("SELECT id FROM cycles WHERE finished_at IS NULL")]
+        for cid in ids:
+            self.db.execute("UPDATE cycles SET finished_at=started_at, outcome='interrupted', "
+                            "detail='process died before the cycle finished; next cycle "
+                            "reconciles any pending write' WHERE id=?", (cid,))
+        return ids
+
     def start_cycle(self, cycle_id: str, trigger: str | None = None) -> None:
         self.db.execute("INSERT INTO cycles(id,started_at,trigger) VALUES(?,?,?)",
                         (cycle_id, time.time(), trigger))

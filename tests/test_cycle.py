@@ -159,6 +159,7 @@ def test_crash_after_post_recovers_on_restart_without_duplicate(cfg):
     assert len(canvas.mine()) == 1 and canvas.post_calls == 1
     mem = Memory(cfg.state_dir / "memory.sqlite3")
     assert [row["status"] for row in mem.my_posts()] == ["verified"]
+    assert [c["outcome"] for c in mem.recent_cycles()][-1] == "interrupted"
 
 
 def test_pending_that_never_reached_canvas_is_not_counted_as_posted(cfg):

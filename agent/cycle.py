@@ -92,6 +92,8 @@ class Agent:
             self.events.log(self.cycle_id, "cycle_end", outcome=result.outcome, detail=result.detail)
             return result
 
+        for cid in self.memory.mark_interrupted_cycles():
+            self.events.log(self.cycle_id, "previous_cycle_interrupted", interrupted_cycle=cid)
         trigger = os.environ.get("AGENT_TRIGGER", "local")
         self.memory.start_cycle(self.cycle_id, trigger)
         self.events.log(self.cycle_id, "cycle_start", trigger=trigger, dry_run=self.dry_run,
