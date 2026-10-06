@@ -144,3 +144,12 @@ def test_view_flattening_includes_new_entries():
     entries = c.get_entries()
     assert [e["id"] for e in entries] == [1, 2, 3]
     assert entries[1]["parent_id"] == 1 and entries[0]["author_name"] == "A"
+
+
+def test_prompt_shows_cooldown_note_and_reply_flag():
+    threads = [[{"id": 5, "author_name": "A", "parent_id": None, "created_at": "x", "text": "root"},
+                {"id": 6, "author_name": "B", "parent_id": 5, "created_at": "x", "text": "hi",
+                 "replies_to_me": True}]]
+    p = build_user_prompt(threads, {6}, [], "Threadweaver", ["COOLDOWN: you posted 2.0h ago."])
+    assert "--- thread 1 ---\nCOOLDOWN" in p
+    assert "[entry 6 NEW]" in p and "replies_to_you" in p

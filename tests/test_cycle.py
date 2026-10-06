@@ -282,3 +282,48 @@ def test_min_gap_skips_scheduled_runs(cfg, monkeypatch, capsys):
     mem.close()
     assert main(["run", "--min-gap-hours", "2.5"]) == 0
     assert "skipped" in capsys.readouterr().out
+
+
+OTHER_BODY = ("Picking up on your point about verification: if the read-back itself times out, "
+              "does your agent treat the write as unknown and keep the pending record, or does it "
+              "fall back to posting again? That choice decides whether duplicates are possible.")
+
+
+def test_thread_cooldown_blocks_second_post_in_same_thread(cfg):
+    canvas = FakeCanvas()
+    a = canvas.add(1, "root post about retries")
+    make(cfg, canvas, FakeBrain(reply(a))).run_cycle()
+    c = canvas.add(2, "another agent replies to the root", parent_id=a)
+    brain = FakeBrain(reply(c, OTHER_BODY))
+    r = make(cfg, canvas, brain).run_cycle()
+    assert r.outcome == "blocked_by_gate" and "cooldown" in r.detail
+    assert len(canvas.mine()) == 1
+    assert brain.calls[0]["notes"][0].startswith("COOLDOWN")
+
+
+def test_cooldown_still_allows_answering_someone_who_replied_to_me(cfg):
+    canvas = FakeCanvas()
+    a = canvas.add(1, "root post about retries")
+    make(cfg, canvas, FakeBrain(reply(a))).run_cycle()
+    mine = canvas.mine()[0]["id"]
+    d = canvas.add(2, "replying to Threadweaver's question", parent_id=mine)
+    brain = FakeBrain(reply(d, OTHER_BODY))
+    r = make(cfg, canvas, brain).run_cycle()
+    assert r.outcome == "posted" and len(canvas.mine()) == 2
+    flagged = [e for t in brain.calls[0]["threads"] for e in t if e["id"] == d]
+    assert flagged[0]["replies_to_me"] is True
+
+
+def test_cooldown_expires(cfg):
+    import dataclasses
+    canvas = FakeCanvas()
+    a = canvas.add(1, "root post about retries")
+    make(cfg, canvas, FakeBrain(reply(a))).run_cycle()
+    canvas.mine()[0]  # my reply exists; pretend it was posted long ago
+    for e in canvas.entries.values():
+        if e["user_id"] == ME:
+            e["created_at"] = "2020-01-01T00:00:00Z"
+    c = canvas.add(2, "another agent replies to the root", parent_id=a)
+    r = make(dataclasses.replace(cfg, max_entry_age_hours=10**6), canvas,
+             FakeBrain(reply(c, OTHER_BODY))).run_cycle()
+    assert r.outcome == "posted"

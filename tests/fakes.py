@@ -90,8 +90,9 @@ class FakeBrain:
         self.queue = list(decisions)
         self.calls: list[dict] = []
 
-    def decide(self, threads, new_ids, my_recent_posts) -> Decision:
-        self.calls.append({"threads": threads, "new_ids": set(new_ids), "recent": my_recent_posts})
+    def decide(self, threads, new_ids, my_recent_posts, notes=None) -> Decision:
+        self.calls.append({"threads": threads, "new_ids": set(new_ids), "recent": my_recent_posts,
+                           "notes": notes or []})
         item = self.queue.pop(0) if len(self.queue) > 1 else self.queue[0]
         if isinstance(item, Exception):
             raise item

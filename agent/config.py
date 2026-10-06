@@ -56,6 +56,7 @@ class Config:
     max_consecutive_failures: int
     use_fallbacks: bool
     max_entry_age_hours: int = 72
+    thread_cooldown_hours: int = 12
 
     @property
     def topic_url(self) -> str:
@@ -92,4 +93,5 @@ def load_config(require_secrets: bool = True) -> Config:
         max_consecutive_failures=max(_int("AGENT_MAX_CONSECUTIVE_FAILURES", 3), 1),
         use_fallbacks=os.environ.get("AGENT_USE_FALLBACKS", "1").strip() != "0",
         max_entry_age_hours=max(_int("AGENT_MAX_ENTRY_AGE_HOURS", 72), 1),
+        thread_cooldown_hours=max(_int("AGENT_THREAD_COOLDOWN_HOURS", 12), 0),
     )

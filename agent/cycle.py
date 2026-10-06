@@ -33,6 +33,15 @@ MAX_ENTRIES_PER_THREAD = 15
 MAX_CHARS_PER_ENTRY = 1200
 
 
+def root_of(e: dict, by_id: dict[int, dict]) -> int:
+    """Id of the top-level entry (thread start) that `e` belongs to."""
+    visited = set()
+    while e.get("parent_id") and e["parent_id"] in by_id and e["id"] not in visited:
+        visited.add(e["id"])
+        e = by_id[e["parent_id"]]
+    return e["id"]
+
+
 class Paused(Exception):
     pass
 
@@ -151,9 +160,9 @@ class Agent:
                                f"hourly post limit ({self.cfg.max_posts_per_hour}) reached; "
                                "new entries left unseen for next cycle" + notes)
 
-        threads, considered = self._build_threads(entries, by_id, new)
+        threads, considered, thread_notes = self._build_threads(entries, by_id, new, me)
         recent = self._my_previous_bodies(entries, me)[:10]
-        decision = self.brain.decide(threads, considered, recent)
+        decision = self.brain.decide(threads, considered, recent, thread_notes)
         self.events.log(self.cycle_id, "decision", action=decision.action, style=decision.style,
                         target=decision.target_entry_id, reason=decision.reason,
                         considered=sorted(considered))
@@ -207,27 +216,21 @@ class Agent:
         return min(self.cfg.max_posts_per_cycle, self.cfg.max_posts_per_hour - used)
 
     def _build_threads(self, entries: list[dict], by_id: dict[int, dict],
-                       new: list[dict]) -> tuple[list[list[dict]], set[int]]:
-        def root_of(e: dict) -> int:
-            seen_ids = set()
-            while e.get("parent_id") and e["parent_id"] in by_id and e["id"] not in seen_ids:
-                seen_ids.add(e["id"])
-                e = by_id[e["parent_id"]]
-            return e["id"]
-
+                       new: list[dict], me: int) -> tuple[list[list[dict]], set[int], list[str]]:
         roots: dict[int, list[dict]] = {}
         for e in entries:
-            roots.setdefault(root_of(e), []).append(e)
+            roots.setdefault(root_of(e, by_id), []).append(e)
         new_roots: list[int] = []
         for e in sorted(new, key=lambda x: x["id"], reverse=True):
-            r = root_of(e)
+            r = root_of(e, by_id)
             if r not in new_roots:
                 new_roots.append(r)
         chosen = new_roots[:MAX_THREADS_IN_PROMPT]  # most recently active threads first
 
-        threads, considered = [], set()
+        threads, considered, notes = [], set(), []
         new_ids = {e["id"] for e in new}
         for r in chosen:
+            notes.append(self._cooldown_note(r, entries, by_id, me))
             members = sorted(roots[r], key=lambda x: x["id"])
             if len(members) > MAX_ENTRIES_PER_THREAD:
                 members = [members[0]] + members[-(MAX_ENTRIES_PER_THREAD - 1):]
@@ -236,11 +239,29 @@ class Agent:
                 text = e["text"]
                 if len(text) > MAX_CHARS_PER_ENTRY:
                     text = text[:MAX_CHARS_PER_ENTRY] + " [...truncated]"
-                thread.append({**e, "text": text})
+                parent = by_id.get(e.get("parent_id") or -1)
+                thread.append({**e, "text": text,
+                               "replies_to_me": bool(parent and parent.get("user_id") == me)})
                 if e["id"] in new_ids:
                     considered.add(e["id"])
             threads.append(thread)
-        return threads, considered
+        return threads, considered, notes
+
+    def _last_post_in_thread(self, root: int, entries: list[dict], by_id: dict[int, dict],
+                             me: int) -> float | None:
+        times = [parse_time(e.get("created_at")) for e in entries
+                 if e.get("user_id") == me and root_of(e, by_id) == root]
+        times = [t for t in times if t]
+        return max(times) if times else None
+
+    def _cooldown_note(self, root: int, entries: list[dict], by_id: dict[int, dict],
+                       me: int) -> str:
+        last = self._last_post_in_thread(root, entries, by_id, me)
+        if last is None or self.now() - last >= self.cfg.thread_cooldown_hours * 3600:
+            return ""
+        hours = (self.now() - last) / 3600
+        return (f"COOLDOWN: you posted in this thread {hours:.1f}h ago. Do not post here again "
+                "unless a NEW entry replies directly to one of your posts (marked replies_to_you).")
 
     # ================================================================ acting
 
@@ -264,6 +285,15 @@ class Agent:
                 return done("blocked_by_gate", f"reply target {parent_id} is not in this forum")
             if target.get("user_id") == me:
                 return done("blocked_by_gate", "model tried to reply to my own post")
+            parent = by_id.get(target.get("parent_id") or -1)
+            answers_me = bool(parent and parent.get("user_id") == me)
+            last = self._last_post_in_thread(root_of(target, by_id), list(by_id.values()),
+                                             by_id, me)
+            cooldown = self.cfg.thread_cooldown_hours * 3600
+            if last is not None and self.now() - last < cooldown and not answers_me:
+                return done("blocked_by_gate",
+                            f"thread cooldown: I posted in this thread "
+                            f"{(self.now() - last) / 3600:.1f}h ago and nobody replied to me")
 
         key = idempotency_key(kind, parent_id, body)
         existing = self.memory.get_action(key)

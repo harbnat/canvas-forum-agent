@@ -53,10 +53,15 @@ unresolved. Make it shorter and clearer than the posts it draws on.
 question or give one concrete counterexample or edge case that would move the \
 discussion forward. Avoid generic prompts like "can you elaborate?".
 
-When to post:
-- Post only if you add something specific that is not already in the thread. Silence \
-is a good outcome: choose "none" when the new entries are greetings, test posts, \
-already well answered, off-topic, or when your contribution would be generic.
+When to post (the bar is high, and most runs should end in "none"):
+- Post only if ALL of these hold: (1) you add a specific point, question, or \
+connection that nobody in the thread has already made; (2) it engages a particular \
+agent's claim by name; (3) a thoughtful reader of the thread would be glad you posted. \
+If you are unsure, choose "none". Silence is a good outcome.
+- Choose "none" when the new entries are greetings, test posts, already well \
+answered, off-topic, or when your contribution would be generic or incremental.
+- Threads marked COOLDOWN are ones you posted in recently. Do not post in them \
+unless a NEW entry is marked replies_to_you, i.e. someone answered you directly.
 - Prefer replying in an existing thread over starting a new one. Start a new thread \
 only if the new entries raise a cross-cutting theme that no thread covers.
 - Never reply to your own posts or repeat a point you already made (your recent posts \
@@ -85,16 +90,20 @@ def _entry_block(e: dict, mark_new: bool) -> str:
     head = f"[entry {e['id']}{tag}] author={e.get('author_name', 'unknown')!r}"
     head += f" reply_to={parent}" if parent else " (thread start)"
     head += f" posted={e.get('created_at', '?')}"
+    if e.get("replies_to_me"):
+        head += " replies_to_you"
     return f"{head}\n{e['text']}\n"
 
 
 def build_user_prompt(threads: list[list[dict]], new_ids: set[int],
-                      my_recent_posts: list[str], my_name: str) -> str:
+                      my_recent_posts: list[str], my_name: str,
+                      notes: list[str] | None = None) -> str:
     parts = ["Here is the forum snapshot. Entries marked NEW are ones you have not "
              "considered before; the others are context.\n",
              "<untrusted_forum_content>"]
     for i, thread in enumerate(threads, 1):
-        parts.append(f"--- thread {i} ---")
+        note = notes[i - 1] if notes and i - 1 < len(notes) else ""
+        parts.append(f"--- thread {i} ---" + (f"\n{note}" if note else ""))
         for e in thread:
             parts.append(_entry_block(e, e["id"] in new_ids))
     parts.append("</untrusted_forum_content>\n")
@@ -122,7 +131,7 @@ class Brain:
             self.client = anthropic.Anthropic(max_retries=3, timeout=180.0)
 
     def decide(self, threads: list[list[dict]], new_ids: set[int],
-               my_recent_posts: list[str]) -> Decision:
+               my_recent_posts: list[str], notes: list[str] | None = None) -> Decision:
         if self.faults and self.faults.fire("malformed_llm"):
             return self._parse_raw('{"action": "reply", "body": ')  # truncated JSON
 
@@ -131,7 +140,7 @@ class Brain:
             max_tokens=16000,
             system=SYSTEM_PROMPT.format(name=self.agent_name),
             messages=[{"role": "user", "content": build_user_prompt(
-                threads, new_ids, my_recent_posts, self.agent_name)}],
+                threads, new_ids, my_recent_posts, self.agent_name, notes)}],
             output_format=Decision,
             output_config={"effort": "medium"},
         )
