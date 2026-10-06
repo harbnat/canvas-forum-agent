@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS cycles (
     started_at   REAL NOT NULL,
     finished_at  REAL,
     outcome      TEXT,
-    detail       TEXT
+    detail       TEXT,
+    trigger      TEXT                    -- what started it: timer, github-schedule, manual-*
 );
 CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
@@ -70,6 +71,10 @@ class Memory:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")  # survive power loss / kill -9
         self.db.executescript(SCHEMA)
+        try:  # databases created before the trigger column existed
+            self.db.execute("ALTER TABLE cycles ADD COLUMN trigger TEXT")
+        except sqlite3.OperationalError:
+            pass
 
     def close(self) -> None:
         self.db.close()
@@ -175,8 +180,9 @@ class Memory:
 
     # -------------------------------------------------------------- cycles
 
-    def start_cycle(self, cycle_id: str) -> None:
-        self.db.execute("INSERT INTO cycles(id,started_at) VALUES(?,?)", (cycle_id, time.time()))
+    def start_cycle(self, cycle_id: str, trigger: str | None = None) -> None:
+        self.db.execute("INSERT INTO cycles(id,started_at,trigger) VALUES(?,?,?)",
+                        (cycle_id, time.time(), trigger))
 
     def finish_cycle(self, cycle_id: str, outcome: str, detail: str, failed: bool) -> None:
         with self.txn() as db:

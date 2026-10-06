@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -82,8 +83,9 @@ class Agent:
             self.events.log(self.cycle_id, "cycle_end", outcome=result.outcome, detail=result.detail)
             return result
 
-        self.memory.start_cycle(self.cycle_id)
-        self.events.log(self.cycle_id, "cycle_start", dry_run=self.dry_run,
+        trigger = os.environ.get("AGENT_TRIGGER", "local")
+        self.memory.start_cycle(self.cycle_id, trigger)
+        self.events.log(self.cycle_id, "cycle_start", trigger=trigger, dry_run=self.dry_run,
                         fault=self.faults.name)
         try:
             result = self._run()

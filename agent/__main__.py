@@ -134,7 +134,8 @@ def _status(cfg, memory: Memory) -> int:
     print(f"halted={memory.halted}  consecutive_failures={memory.consecutive_failures}")
     print("\nRecent cycles:")
     for c in memory.recent_cycles(15):
-        print(f"  {_fmt(c['started_at'])}  {c['outcome'] or 'running?':24} {c['detail'] or ''}"[:200])
+        print(f"  {_fmt(c['started_at'])}  {c['trigger'] or '-':16} {c['outcome'] or 'running?':24} "
+              f"{c['detail'] or ''}"[:220])
     print("\nMy posts:")
     for a in memory.my_posts(20):
         url = cfg.entry_url(a["canvas_entry_id"]) if a["canvas_entry_id"] else "-"
@@ -149,10 +150,13 @@ def _evidence(cfg, memory: Memory, events: EventLog) -> int:
         if a["status"] == "verified":
             print(f"- {_fmt(a['created_at'])} — {a['kind']} — {cfg.entry_url(a['canvas_entry_id'])}"
                   f" — _{a['reason']}_")
-    print("\n## Scheduled cycles\n\n| started | outcome | detail |\n|---|---|---|")
+    print("\n## Cycles\n\nTrigger: `timer` = hourly cron-job.org timer (shown by GitHub as "
+          "\"Manually run\" because it calls the API with the owner's token), "
+          "`github-schedule` = GitHub's built-in cron, `manual-*` = started by hand.\n")
+    print("| started | trigger | outcome | detail |\n|---|---|---|---|")
     for c in reversed(memory.recent_cycles(200)):
         detail = (c["detail"] or "").replace("|", "/")[:160]
-        print(f"| {_fmt(c['started_at'])} | {c['outcome']} | {detail} |")
+        print(f"| {_fmt(c['started_at'])} | {c['trigger'] or '-'} | {c['outcome']} | {detail} |")
     fault_cycles = {e["cycle"] for e in events.read() if e.get("event") == "cycle_start" and e.get("fault")}
     if fault_cycles:
         print("\n## Failure-injection runs (from logs/agent.jsonl)\n\n```")
