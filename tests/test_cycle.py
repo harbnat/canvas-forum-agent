@@ -328,3 +328,64 @@ def test_cooldown_expires(cfg):
     r = make(dataclasses.replace(cfg, max_entry_age_hours=10**6), canvas,
              FakeBrain(reply(c, OTHER_BODY))).run_cycle()
     assert r.outcome == "posted"
+
+
+def test_crash_on_nested_reply_recovers_without_duplicate(cfg):
+    """Regression: Canvas's replies endpoint 404s for replies-to-replies."""
+    canvas = FakeCanvas()
+    root = canvas.add(1, "root post")
+    nested = canvas.add(2, "a reply to the root", parent_id=root)
+    canvas.crash_after_save = True
+    with pytest.raises(Crash):
+        make(cfg, canvas, FakeBrain(reply(nested))).run_cycle()
+    r = make(cfg, canvas, FakeBrain(none())).run_cycle()
+    assert "recovered earlier post" in r.detail
+    assert len(canvas.mine()) == 1
+    mem = Memory(cfg.state_dir / "memory.sqlite3")
+    assert [row["status"] for row in mem.my_posts()] == ["verified"]
+
+
+def test_lookup_failure_keeps_record_pending(cfg):
+    canvas = FakeCanvas()
+    a = canvas.add(1, "a post")
+    canvas.crash_after_save = True
+    with pytest.raises(Crash):
+        make(cfg, canvas, FakeBrain(reply(a))).run_cycle()
+    canvas.get_entries_failures = [False, True]  # load ok, reconcile lookup fails
+    r = make(cfg, canvas, FakeBrain(none())).run_cycle()
+    assert "left pending" in r.detail
+    mem = Memory(cfg.state_dir / "memory.sqlite3")
+    assert [row["status"] for row in mem.my_posts()] == ["pending"]
+    # Next cycle can look again and resolves it.
+    r = make(cfg, canvas, FakeBrain(none())).run_cycle()
+    assert "recovered earlier post" in r.detail and len(canvas.mine()) == 1
+
+
+def test_corrects_record_wrongly_marked_not_posted(cfg):
+    canvas = FakeCanvas()
+    a = canvas.add(1, "a post")
+    make(cfg, canvas, FakeBrain(reply(a))).run_cycle()
+    mem = Memory(cfg.state_dir / "memory.sqlite3")
+    key = mem.my_posts()[0]["idem_key"]
+    mem.mark_action(key, "not_posted")  # what the old lookup bug did
+    canvas.add(2, "something new")
+    r = make(cfg, canvas, FakeBrain(none())).run_cycle()
+    assert "corrected record" in r.detail
+    assert Memory(cfg.state_dir / "memory.sqlite3").get_action(key)["status"] == "verified"
+
+
+def test_daily_budget_allows_only_answers_to_me(cfg):
+    import dataclasses
+    cfg2 = dataclasses.replace(cfg, daily_post_budget=1)
+    canvas = FakeCanvas()
+    a = canvas.add(1, "root post")
+    make(cfg2, canvas, FakeBrain(reply(a))).run_cycle()
+    b = canvas.add(2, "unrelated new thread")
+    brain = FakeBrain(reply(b, OTHER_BODY))
+    r = make(cfg2, canvas, brain).run_cycle()
+    assert r.outcome == "blocked_by_gate" and "budget" in r.detail
+    assert "budget of 1 posts is used up" in brain.calls[0]["policy"]
+    mine = canvas.mine()[0]["id"]
+    d = canvas.add(3, "answering Threadweaver", parent_id=mine)
+    r = make(cfg2, canvas, FakeBrain(reply(d, OTHER_BODY + " Thanks."))).run_cycle()
+    assert r.outcome == "posted"

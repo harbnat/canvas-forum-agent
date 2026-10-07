@@ -50,6 +50,10 @@ class PostFailed(Exception):
     pass
 
 
+class LookupUnknown(Exception):
+    """Could not check Canvas, so we do not know whether a post exists. Never treat as 'absent'."""
+
+
 @dataclass
 class CycleResult:
     outcome: str
@@ -81,6 +85,7 @@ class Agent:
         self.sleep = sleep
         self.now = now
         self.cycle_id = ""
+        self.budget_spent = False
 
     # ================================================================= entry
 
@@ -164,7 +169,18 @@ class Agent:
 
         threads, considered, thread_notes = self._build_threads(entries, by_id, new, me)
         recent = self._my_previous_bodies(entries, me)[:10]
-        decision = self.brain.decide(threads, considered, recent, thread_notes)
+        posts_24h = self._posts_in_window(entries, me, 24 * 3600)
+        self.budget_spent = posts_24h >= self.cfg.daily_post_budget
+        policy = (f"You have posted {posts_24h} times in the last 24 hours. "
+                  + (f"Your daily budget of {self.cfg.daily_post_budget} posts is used up: "
+                     "you may ONLY reply to a NEW entry marked replies_to_you (someone answering "
+                     "you directly). If there is none worth answering, choose \"none\"."
+                     if self.budget_spent else
+                     f"Your daily budget is {self.cfg.daily_post_budget} posts; spend it only "
+                     "on contributions that clearly add value."))
+        decision = self.brain.decide(threads, considered, recent, thread_notes, policy)
+        self.events.log(self.cycle_id, "posting_budget", posts_24h=posts_24h,
+                        budget=self.cfg.daily_post_budget, spent=self.budget_spent)
         self.events.log(self.cycle_id, "decision", action=decision.action, style=decision.style,
                         target=decision.target_entry_id, reason=decision.reason,
                         considered=sorted(considered))
@@ -208,6 +224,13 @@ class Agent:
         remote = [e["text"] for e in sorted(entries, key=lambda e: e["id"], reverse=True)
                   if e.get("user_id") == me]
         return local + [t for t in remote if t not in local]
+
+    def _posts_in_window(self, entries: list[dict], me: int, seconds: float) -> int:
+        since = self.now() - seconds
+        local = self.memory.posts_since(since)
+        remote = sum(1 for e in entries if e.get("user_id") == me
+                     and (parse_time(e.get("created_at")) or 0) >= since)
+        return max(local, remote)
 
     def _post_budget(self, entries: list[dict], me: int) -> int:
         hour_ago = self.now() - 3600
@@ -281,6 +304,8 @@ class Agent:
         parent_id = d.target_entry_id if kind == "reply" else None
         body = d.body.strip()
 
+        if kind == "new_thread" and self.budget_spent:
+            return done("blocked_by_gate", "daily post budget used up; no new threads")
         if kind == "reply":
             target = by_id.get(parent_id or -1)
             if target is None:
@@ -292,6 +317,9 @@ class Agent:
             last = self._last_post_in_thread(root_of(target, by_id), list(by_id.values()),
                                              by_id, me)
             cooldown = self.cfg.thread_cooldown_hours * 3600
+            if self.budget_spent and not answers_me:
+                return done("blocked_by_gate", "daily post budget used up and this entry "
+                            "is not a reply to me")
             if last is not None and self.now() - last < cooldown and not answers_me:
                 return done("blocked_by_gate",
                             f"thread cooldown: I posted in this thread "
@@ -342,7 +370,11 @@ class Agent:
             self.memory.mark_action(key, "not_posted")
             raise
         except (PostFailed, CanvasError) as e:
-            found = self._find_my_post(kind, parent_id, body, me)
+            try:
+                found = self._find_my_post(kind, parent_id, body, me)
+            except LookupUnknown as lookup:
+                raise PostFailed(f"{e}; could not check Canvas ({lookup}), left pending "
+                                 "for the next cycle to reconcile") from e
             if found is None:
                 self.memory.mark_action(key, "not_posted")
                 raise PostFailed(f"{e}; confirmed nothing was saved") from e
@@ -383,7 +415,11 @@ class Agent:
                 last = e
                 self.events.log(self.cycle_id, "write_ambiguous", error=str(e), attempt=attempt + 1)
                 self.sleep(backoff_delay(attempt))
-                found = self._find_my_post(kind, parent_id, body, me)
+                try:
+                    found = self._find_my_post(kind, parent_id, body, me)
+                except LookupUnknown as lookup:
+                    # Can't tell whether it was saved: re-posting could duplicate it. Stop here.
+                    raise PostFailed(f"{e}; could not check Canvas ({lookup})") from e
                 if found is not None:
                     self.events.log(self.cycle_id, "reconciled_after_ambiguous_write",
                                     canvas_entry_id=found["id"],
@@ -396,14 +432,20 @@ class Agent:
         raise PostFailed(f"gave up after {POST_ATTEMPTS} attempts: {last}")
 
     def _find_my_post(self, kind: str, parent_id: int | None, body: str, me: int) -> dict | None:
+        """My entry with this body under this parent, None if absent, LookupUnknown if unsure.
+
+        Searches the whole flattened topic, because Canvas's "list replies" endpoint only
+        covers top-level entries and returns 404 for replies to replies.
+        """
         try:
-            candidates = (self.canvas.get_replies(parent_id) if kind == "reply" and parent_id
-                          else self.canvas.get_top_level_entries())
+            candidates = self.canvas.get_entries()
         except CanvasError as e:
             log.warning("could not reconcile (%s)", e)
-            return None
+            raise LookupUnknown(str(e)) from e
+        want_parent = parent_id if kind == "reply" else None
         for c in candidates:
-            if c.get("user_id") == me and safety.contains_post(c.get("message"), body):
+            if (c.get("user_id") == me and (c.get("parent_id") or None) == want_parent
+                    and safety.contains_post(c.get("message"), body)):
                 return c
         return None
 
@@ -421,8 +463,32 @@ class Agent:
     def _reconcile_pending(self, me: int) -> str:
         """Resolve writes left 'pending' by a crash / lost ack in an earlier run."""
         notes = []
+        # Also re-check recent 'not_posted' records: an earlier version could mark a
+        # write as not posted when it merely failed to look it up.
+        recheck = self.memory.recent_not_posted(self.now() - 48 * 3600)
+        for a in recheck:
+            try:
+                found = self._find_my_post(a["kind"], a["parent_id"], a["body"], me)
+            except LookupUnknown:
+                continue
+            if found is not None:
+                self.memory.mark_action(a["idem_key"], "verified", int(found["id"]))
+                self.memory.mark_seen_ids(json.loads(a["context_ids"]) + [int(found["id"])],
+                                          self.cycle_id)
+                self.events.log(self.cycle_id, "reconciled_pending", idem_key=a["idem_key"],
+                                canvas_entry_id=found["id"],
+                                result="found_on_canvas_corrected_not_posted_record")
+                notes.append(f"corrected record: earlier post {found['id']} was saved "
+                             "(marked verified, not reposting)")
         for a in self.memory.pending_actions():
-            found = self._find_my_post(a["kind"], a["parent_id"], a["body"], me)
+            try:
+                found = self._find_my_post(a["kind"], a["parent_id"], a["body"], me)
+            except LookupUnknown:
+                self.events.log(self.cycle_id, "reconciled_pending", idem_key=a["idem_key"],
+                                result="could_not_check_left_pending")
+                notes.append(f"could not check earlier attempt {a['idem_key'][:8]}; "
+                             "left pending")
+                continue
             if found is not None:
                 self.memory.mark_action(a["idem_key"], "verified", int(found["id"]))
                 self.memory.mark_seen_ids(json.loads(a["context_ids"]) + [int(found["id"])],

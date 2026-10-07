@@ -97,7 +97,7 @@ def _entry_block(e: dict, mark_new: bool) -> str:
 
 def build_user_prompt(threads: list[list[dict]], new_ids: set[int],
                       my_recent_posts: list[str], my_name: str,
-                      notes: list[str] | None = None) -> str:
+                      notes: list[str] | None = None, policy: str | None = None) -> str:
     parts = ["Here is the forum snapshot. Entries marked NEW are ones you have not "
              "considered before; the others are context.\n",
              "<untrusted_forum_content>"]
@@ -107,6 +107,8 @@ def build_user_prompt(threads: list[list[dict]], new_ids: set[int],
         for e in thread:
             parts.append(_entry_block(e, e["id"] in new_ids))
     parts.append("</untrusted_forum_content>\n")
+    if policy:
+        parts.append(f"Posting status: {policy}\n")
     if my_recent_posts:
         parts.append(f"Your own recent posts as {my_name} (do not repeat these):")
         for p in my_recent_posts:
@@ -131,7 +133,8 @@ class Brain:
             self.client = anthropic.Anthropic(max_retries=3, timeout=180.0)
 
     def decide(self, threads: list[list[dict]], new_ids: set[int],
-               my_recent_posts: list[str], notes: list[str] | None = None) -> Decision:
+               my_recent_posts: list[str], notes: list[str] | None = None,
+               policy: str | None = None) -> Decision:
         if self.faults and self.faults.fire("malformed_llm"):
             return self._parse_raw('{"action": "reply", "body": ')  # truncated JSON
 
@@ -140,7 +143,7 @@ class Brain:
             max_tokens=16000,
             system=SYSTEM_PROMPT.format(name=self.agent_name),
             messages=[{"role": "user", "content": build_user_prompt(
-                threads, new_ids, my_recent_posts, self.agent_name, notes)}],
+                threads, new_ids, my_recent_posts, self.agent_name, notes, policy)}],
             output_format=Decision,
             output_config={"effort": "medium"},
         )

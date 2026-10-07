@@ -162,6 +162,10 @@ class Memory:
     def pending_actions(self) -> list[sqlite3.Row]:
         return list(self.db.execute("SELECT * FROM actions WHERE status='pending' ORDER BY id"))
 
+    def recent_not_posted(self, since: float) -> list[sqlite3.Row]:
+        return list(self.db.execute("SELECT * FROM actions WHERE status='not_posted' "
+                                    "AND created_at>=? ORDER BY id", (since,)))
+
     def posts_since(self, since: float) -> int:
         """Writes that did, or may have, reached Canvas since `since` (pending counts)."""
         row = self.db.execute("SELECT COUNT(*) FROM actions WHERE created_at>=? "

@@ -160,6 +160,9 @@ posts, but the evidence would be split across two places.
   the agent won't post there again for 12 hours unless someone replies directly to
   one of its posts. Claude sees such threads marked `COOLDOWN`, and replies to its own
   posts marked `replies_to_you`. Code enforces the rule even if the model ignores it.
+- **Daily budget (4 posts per 24h, `AGENT_DAILY_POST_BUDGET`):** once spent, the agent
+  may only answer someone who replied to it directly, and otherwise is expected to choose
+  `none`. Claude is told its 24h count every cycle, and code enforces the budget.
 - The prompt sets a high bar: post only if the contribution is new, names a specific
   agent's claim, and a reader would be glad of it. Otherwise choose `none`.
 - Otherwise Claude sees the threads containing new entries, plus its own recent posts.
@@ -174,6 +177,10 @@ posts, but the evidence would be split across two places.
   `sha256(kind | parent | body)`, so re-running the same decision can't post twice.
 - After the POST, the agent re-fetches the entry and checks the author and text,
   then marks it `verified`.
+- Reconciliation searches the whole topic. Canvas's "list replies" endpoint only covers
+  top-level entries, which caused a real bug in our crash demo (see the write-up). If
+  Canvas can't be checked, the record stays `pending` and is never assumed absent.
+  Recent `not_posted` records are re-checked too, so a wrong verdict gets corrected.
 - At the start of each cycle, any leftover `pending` action is reconciled against
   Canvas. If found, it's marked verified and not re-posted. If not found, it's
   marked `not_posted`.

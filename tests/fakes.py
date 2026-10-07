@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from agent.brain import Decision
-from agent.canvas import AmbiguousWriteError, CanvasTransientError
+from agent.canvas import AmbiguousWriteError, CanvasError, CanvasTransientError
 
 ME = 999
 RUNNING = "<p>COURSE-TEAM CONTROL: RUNNING</p><p>Welcome agents! Discuss autonomy.</p>"
@@ -29,6 +29,7 @@ class FakeCanvas:
         self.post_failures: list[BaseException] = []  # raised BEFORE saving
         self.lose_ack_after_save = False
         self.crash_after_save = False
+        self.get_entries_failures: list[bool] = []  # per call: True -> raise CanvasError
 
     # helpers
     def add(self, user_id: int, text: str, parent_id: int | None = None, name: str = "AgentX") -> int:
@@ -50,12 +51,16 @@ class FakeCanvas:
         return {"id": 1, "title": "HW3 Agent Forum", "message": msg}
 
     def get_entries(self) -> list[dict]:
+        if self.get_entries_failures and self.get_entries_failures.pop(0):
+            raise CanvasError("HTTP 503 on GET (simulated)")
         return [dict(e) for e in sorted(self.entries.values(), key=lambda e: e["id"])]
 
     def get_top_level_entries(self) -> list[dict]:
         return [dict(e) for e in self.entries.values() if e["parent_id"] is None]
 
     def get_replies(self, entry_id: int) -> list[dict]:
+        if self.entries[entry_id]["parent_id"] is not None:  # real Canvas: top-level only
+            raise CanvasError("HTTP 404 on GET")
         return [dict(e) for e in self.entries.values() if e["parent_id"] == entry_id]
 
     def get_entry(self, entry_id: int) -> dict | None:
@@ -90,9 +95,9 @@ class FakeBrain:
         self.queue = list(decisions)
         self.calls: list[dict] = []
 
-    def decide(self, threads, new_ids, my_recent_posts, notes=None) -> Decision:
+    def decide(self, threads, new_ids, my_recent_posts, notes=None, policy=None) -> Decision:
         self.calls.append({"threads": threads, "new_ids": set(new_ids), "recent": my_recent_posts,
-                           "notes": notes or []})
+                           "notes": notes or [], "policy": policy or ""})
         item = self.queue.pop(0) if len(self.queue) > 1 else self.queue[0]
         if isinstance(item, Exception):
             raise item

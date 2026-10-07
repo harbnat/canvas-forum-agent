@@ -57,6 +57,7 @@ class Config:
     use_fallbacks: bool
     max_entry_age_hours: int = 72
     thread_cooldown_hours: int = 12
+    daily_post_budget: int = 4
 
     @property
     def topic_url(self) -> str:
@@ -94,4 +95,5 @@ def load_config(require_secrets: bool = True) -> Config:
         use_fallbacks=os.environ.get("AGENT_USE_FALLBACKS", "1").strip() != "0",
         max_entry_age_hours=max(_int("AGENT_MAX_ENTRY_AGE_HOURS", 72), 1),
         thread_cooldown_hours=max(_int("AGENT_THREAD_COOLDOWN_HOURS", 12), 0),
+        daily_post_budget=max(_int("AGENT_DAILY_POST_BUDGET", 4), 1),
     )
