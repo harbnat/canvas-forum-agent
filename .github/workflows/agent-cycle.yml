@@ -1,5 +1,10 @@
 # Runs one Threadweaver cycle about every 3 hours on GitHub's servers.
 #
+# Since HW4 the cycle is the Game Odds Lab services agent (python -m oddslab):
+# it offers a service on the HW4 Agent Services Forum, answers requests, and
+# hires another agent. The HW3 forum agent (python -m agent) stays in the repo
+# but is no longer scheduled.
+#
 # GitHub's scheduler often delays or drops scheduled runs, so it is asked to
 # start the workflow five times an hour and the agent skips any scheduled start that
 # comes less than 2.5 hours after its last real cycle. Manual runs are never skipped.
@@ -19,7 +24,7 @@
 name: agent-cycle
 # GitHub shows API-dispatched runs as "Manually run by <token owner>", including
 # the hourly timer's. The run title says what actually started each run.
-run-name: "${{ github.event_name == 'schedule' && 'Scheduled (GitHub cron)' || inputs.mode == 'auto' && 'Timer (hourly, cron-job.org)' || inputs.inject_fault != 'none' && format('Manual: {0} + fault {1}', inputs.mode, inputs.inject_fault) || format('Manual: {0}', inputs.mode) }}"
+run-name: "${{ github.event_name == 'schedule' && 'Scheduled (GitHub cron)' || inputs.mode == 'auto' && 'Timer (hourly, cron-job.org)' || format('Manual: {0}', inputs.mode) }}"
 
 on:
   schedule:
@@ -38,12 +43,6 @@ on:
         type: choice
         default: run
         options: [run, auto, dry-run, check, status, reset]
-      inject_fault:
-        description: "Failure to inject (only for mode=run)"
-        type: choice
-        default: none
-        options: [none, lost_ack, crash_after_post, duplicate_event, http_500,
-                  malformed_response, malformed_llm]
 
 # Never run two cycles at once: they would race on the cached memory.
 concurrency:
@@ -62,11 +61,12 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       AGENT_NAME: ${{ vars.AGENT_NAME || 'Threadweaver' }}
       MODE: ${{ inputs.mode || 'run' }}
+      # "0" until a dry run against the real forum has been reviewed: run/auto then do nothing.
+      HW4_LIVE: "0"
       AGENT_TRIGGER: >-
         ${{ github.event_name == 'schedule' && 'github-schedule'
         || inputs.mode == 'auto' && 'timer'
         || format('manual-{0}', inputs.mode) }}
-      FAULT: ${{ inputs.inject_fault || 'none' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -89,20 +89,22 @@ jobs:
 
       - name: Run agent
         run: |
+          if [ "$HW4_LIVE" != "1" ] && { [ "$MODE" = run ] || [ "$MODE" = auto ]; }; then
+            echo "HW4 agent not live yet (HW4_LIVE=0); only dry-run/check/status are enabled."
+            exit 0
+          fi
           case "$MODE" in
             run)
-              if [ "$FAULT" != "none" ]; then
-                python -m agent run --inject-fault "$FAULT"
-              elif [ "${{ github.event_name }}" = "schedule" ]; then
-                python -m agent run --min-gap-hours 2.5
+              if [ "${{ github.event_name }}" = "schedule" ]; then
+                python -m oddslab run --min-gap-hours 2.5
               else
-                python -m agent run
+                python -m oddslab run
               fi ;;
-            auto)    python -m agent run --min-gap-hours 2.5 ;;  # used by the external timer
-            dry-run) python -m agent run --dry-run ;;
-            check)   python -m agent check ;;
-            status)  python -m agent status ;;
-            reset)   python -m agent reset ;;
+            auto)    python -m oddslab run --min-gap-hours 2.5 ;;  # used by the external timer
+            dry-run) python -m oddslab run --dry-run ;;
+            check)   python -m oddslab check ;;
+            status)  python -m oddslab status ;;
+            reset)   python -m oddslab reset ;;
           esac
 
       - name: Save agent memory
@@ -119,10 +121,10 @@ jobs:
         run: |
           {
             echo '```'
-            python -m agent status || true
+            python -m oddslab status || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          python -m agent evidence > evidence.md || true
+          python -m oddslab evidence > evidence.md || true
 
       - name: Upload logs and evidence
         if: always()
@@ -130,7 +132,7 @@ jobs:
         with:
           name: agent-logs-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            logs/agent.jsonl
+            logs/hw4/agent.jsonl
             evidence.md
           if-no-files-found: ignore
           retention-days: 30

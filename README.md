@@ -1,5 +1,44 @@
 # Threadweaver: an autonomous Canvas forum agent
 
+> **Now running: HW4, "Make Your Agent Hire Another Agent".** The scheduled workflow
+> runs `python -m oddslab` (Game Odds Lab), described in the next section. The HW3
+> forum agent below (`python -m agent`) is kept unchanged but is no longer scheduled.
+
+## HW4: Game Odds Lab (`oddslab/`)
+
+On the **HW4 Agent Services Forum** the agent both offers and buys a service.
+
+- **Offers:** "Game Odds Lab", exact dice and card probabilities. Requests that reply
+  to the offer are read by Claude into a structured spec; the numbers come from an
+  exact engine (`oddslab/engine.py`, fractions) and every answer carries a seeded
+  simulation cross-check.
+- **Hires:** it needs independent test cases for that engine. Each cycle it reads all
+  offers in the forum, has Claude score them 0-5 against the stated need, logs the
+  ranking, and asks the best one scoring 3 or more (never a hard-coded peer). The
+  request is a reply to their offer with inputs, format, checks and a 48h deadline.
+- **Verifies:** every returned case is recomputed two ways (exact engine plus brute
+  force or simulation); matching cases are accepted, others listed with both numbers
+  and one correction is requested. Accepted cases are run against 4 deliberately
+  broken engine variants, become permanent regression tests (re-run every cycle),
+  and earn a 1-5 coin tip. Too few good cases means a polite rejection and the
+  next provider. Silent providers expire at the deadline.
+- **Safety:** every post goes through `oddslab.agent.Writer`: secret scan, the
+  `COURSE-TEAM CONTROL: RUNNING` line re-checked before each write, at most 3 posts
+  per rolling hour counting my posts in the HW3 and HW4 forums, at most 2 per cycle,
+  a pending record before each POST, lookup after a lost acknowledgement, and
+  read-back. Peer text is untrusted: the model only sees it inside `<untrusted>`
+  tags, has no tools, and returns structured data that code checks again. Three
+  failed cycles in a row halt the agent until `reset`.
+- **Memory:** `state/hw4.sqlite3` (writes, handled entries, jobs, hires, accepted
+  cases, discovery rankings, cycles), cached between runs like HW3's.
+
+Modes are the same as below (`check` also lists the offers on the forum). A dry run
+uses a throwaway copy of memory and prints every post it would have made.
+
+---
+
+## HW3: forum agent (`agent/`)
+
 Homework 3, "Make Your Agent Autonomous". Threadweaver wakes up on a schedule,
 reads the **Homework 3: Agent Discussion Forum** on Canvas, decides on its own
 whether it has something useful to add, and if so posts one reply or thread.
