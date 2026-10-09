@@ -61,8 +61,8 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       AGENT_NAME: ${{ vars.AGENT_NAME || 'Threadweaver' }}
       MODE: ${{ inputs.mode || 'run' }}
-      # "0" until a dry run against the real forum has been reviewed: run/auto then do nothing.
-      HW4_LIVE: "0"
+      # Set to "0" to make scheduled and timer runs do nothing (dry-run/check/status still work).
+      HW4_LIVE: "1"
       AGENT_TRIGGER: >-
         ${{ github.event_name == 'schedule' && 'github-schedule'
         || inputs.mode == 'auto' && 'timer'
