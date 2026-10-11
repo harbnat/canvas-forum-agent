@@ -319,35 +319,66 @@ class ServicesAgent:
 
     def _serve_one(self, e: dict) -> None:
         who = e.get("author_name", "?")
-        d = self.llm.interpret_request(e["text"][:3000], self._context(e))
-        self.events.log(self.cycle_id, "request_seen", entry_id=e["id"], author=who,
-                        action=d.action, restated=d.restated)
+        context = self._context(e)
+        d = self.llm.interpret_request(e["text"][:4000], context)
+        answers, problems = self._answer(d, e) if d.action == "compute" else ([], [])
+        if d.action == "compute" and problems:
+            # One retry: show the model what the engine rejected, so a fixable translation gets fixed.
+            retry = self.llm.interpret_request(e["text"][:4000], context, feedback="\n".join(problems))
+            if retry.action == "compute":
+                d = retry
+                answers, problems = self._answer(d, e)
+        self.events.log(self.cycle_id, "request_seen", entry_id=e["id"], author=who, action=d.action,
+                        restated=d.restated, questions=len(d.questions), problems=problems)
         key = f"job-{e['id']}"
         if d.action == "ignore":
             self._done(e, "provider", "ignored")
             return
-        body, status = None, d.action
         if d.action == "compute":
-            try:
-                if d.spec is None:
-                    raise engine.SpecError("I couldn't turn this into a precise dice or card question.")
-                res = engine.compute(d.spec)
-                chk = engine.simulate(d.spec, seed=int(e["id"]))
-                body = texts.result(d.restated, engine.describe(d.spec), res, chk,
-                                    d.spec.model_dump_json(exclude_defaults=True))
-                status = "answered"
-            except engine.SpecError as err:
-                body, status = texts.decline(str(err)), "declined"
+            sig = "|".join(sorted(a["spec_json"] for a in answers))
+            dup_key = f"answered:{e.get('user_id')}:{sig}"
+            if answers and self.store.get(dup_key):
+                self.events.log(self.cycle_id, "duplicate_request", entry_id=e["id"],
+                                same_as=self.store.get(dup_key))
+                self._done(e, "provider", "duplicate")
+                self.notes.append(f"skipped duplicate request {e['id']} from {who}")
+                return
+            if answers:
+                not_covered = list(problems)
+                if d.message:
+                    not_covered.append(d.message[:200])
+                body, status = texts.result(d.restated, answers, not_covered), "answered"
+            else:
+                reason = "; ".join(problems) or "I couldn't turn this into a precise dice or card question."
+                body, status = texts.decline(reason[:300]), "declined"
         elif d.action == "clarify":
-            body = texts.clarify(d.restated, d.message[:300])
+            body, status = texts.clarify(d.restated, d.message[:300]), "clarify"
         else:
-            body = texts.decline(d.message[:300])
+            body, status = texts.decline(d.message[:300]), "declined"
         posted = self.writer.post(key, f"service {status}", e["id"], body)
         if posted or self.dry_run:
             if not self.dry_run:
                 self._done(e, "provider", status)
                 self.store.upsert_job(e["id"], who, status, d.restated, key)
-            self.notes.append(f"{status} request {e['id']} from {who}")
+                if status == "answered":
+                    self.store.set(dup_key, e["id"])
+            self.notes.append(f"{status} request {e['id']} from {who}"
+                              + (f" ({len(answers)} questions)" if len(answers) > 1 else ""))
+
+    def _answer(self, d, e: dict) -> tuple[list[dict], list[str]]:
+        answers, problems = [], []
+        for i, q in enumerate(d.questions[:6]):
+            label = (q.label or f"Q{i + 1}")[:20]
+            try:
+                res = engine.compute(q.spec)
+                chk = engine.simulate(q.spec, seed=int(e["id"]) + i)
+            except engine.SpecError as err:
+                problems.append(f"{label} ({q.restated[:120]}): {err}")
+                continue
+            answers.append({"label": label, "restated": q.restated, "how_read": engine.describe(q.spec),
+                            "res": res, "check": chk,
+                            "spec_json": q.spec.model_dump_json(exclude_defaults=True)})
+        return answers, problems
 
     def _done(self, e: dict, role: str, outcome: str) -> None:
         if not self.dry_run:

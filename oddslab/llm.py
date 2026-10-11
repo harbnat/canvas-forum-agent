@@ -32,8 +32,13 @@ whole roll/draw until the event happens; needs event).
 - Dice: dice = groups of {count, sides, reroll_once (faces rerolled once, the reroll is \
 kept), explode_on_max}. keep = {which: highest|lowest, n} across all dice. modifier is \
 added to the kept total.
-  Events: {kind:"total", op, value}; {kind:"all_equal"}; {kind:"face_count", face, op, value} \
-(how many kept dice show that face).
+  Events: {kind:"total", op, value}; {kind:"all_equal"}; {kind:"face_count", faces, op, value} \
+(how many kept dice show any of `faces`, e.g. faces [5,6] for "5 or 6 is a success").
+  Exploding with a cap: explode_on_max true and explode_limit = the most extra rolls (a chain \
+that stops at three dice has explode_limit 2).
+  Distribution of a count: question "distribution" with {kind:"face_count", faces} and no op/value. \
+A "distribution" question may also carry a total/face_count event with op/value; then the \
+probability of that event is reported alongside the distribution.
 - Cards (draw without replacement from a deck of `ranks` x `suits`, default 13 x 4): \
 draw = cards drawn (1-7). Events: {kind:"card_count", category: rank|suit|card, \
 category_value, op, value}; {kind:"rank_pattern", pattern}; {kind:"suit_max", op, value} \
@@ -41,7 +46,12 @@ category_value, op, value}; {kind:"rank_pattern", pattern}; {kind:"suit_max", op
 Examples:
 - "3d6, keep highest 2, P(total >= 10)" -> dice [{count:3,sides:6}], keep highest 2, total >= 10
 - "d20 with advantage vs 15" -> dice [{count:2,sides:20}], keep highest 1, total >= 15
-- "at least one 6 in 4d6" -> dice [{count:4,sides:6}], face_count face 6 >= 1
+- "at least one 6 in 4d6" -> dice [{count:4,sides:6}], face_count faces [6] >= 1
+- "6d6, a 5 or 6 is a success, P(at least 3 successes)" -> face_count faces [5,6] >= 3
+- "how many of 6d4 show a 4, full distribution" -> distribution, face_count faces [4]
+- "d6, a 6 rerolls and adds, at most three dice, average" -> expectation, \
+[{count:1,sides:6,explode_on_max:true,explode_limit:2}]
+- "4d6 keep highest 3: distribution and P(total >= 12)" -> distribution, keep highest 3, total >= 12
 - "roll 2d6 until doubles, expected rolls" -> expected_trials_until, all_equal
 - "4d6 drop lowest, average" -> expectation, keep highest 3
 - "5-card hand has at least a pair" -> cards draw 5, rank_pattern at_least_pair
@@ -51,14 +61,25 @@ Unsupported (kind "unsupported"): straights, mixing dice and cards, conditional 
 probabilities, player choices or strategy, anything that is not a pure dice/card chance."""
 
 
+class Question(BaseModel):
+    label: str = Field(description="the requester's own label for this item, e.g. 'Q2' or '(1)'; "
+                                   "else a short label")
+    restated: str = Field(description="this question in one plain sentence")
+    spec: Spec
+
+
 class RequestDecision(BaseModel):
     action: Literal["compute", "clarify", "decline", "ignore"] = Field(
-        description="compute: a dice/card question we can answer; clarify: a dice/card question "
-                    "missing something essential; decline: a request outside dice/card odds; "
-                    "ignore: not a request (thanks, acknowledgement, tip, chatter)")
-    restated: str = Field(description="the question in one plain sentence")
-    spec: Optional[Spec] = Field(default=None, description="required when action is compute")
-    message: str = Field(default="", description="clarify: ONE short question. decline: one short reason")
+        description="compute: at least one dice/card question we can answer; clarify: dice/card "
+                    "questions missing something essential; decline: nothing in it is dice/card odds; "
+                    "ignore: not a new request (thanks, acknowledgement, acceptance, closing note, chatter)")
+    restated: str = Field(description="the whole request in one plain sentence")
+    questions: list[Question] = Field(default_factory=list,
+                                      description="compute: every dice/card question in the message, in "
+                                                  "the requester's order (at most 6)")
+    message: str = Field(default="", description="clarify: ONE short question. decline: one short reason. "
+                                                  "compute: empty, or one line naming parts that are not "
+                                                  "dice/card questions")
 
 
 class OfferScore(BaseModel):
@@ -115,12 +136,21 @@ class LLM:
             raise ValueError(f"no parseable output (stop_reason={resp.stop_reason})")
         return resp.parsed_output
 
-    def interpret_request(self, text: str, context: str) -> RequestDecision:
+    def interpret_request(self, text: str, context: str, feedback: str = "") -> RequestDecision:
         system = ("You run Game Odds Lab, a service that answers dice and card probability "
                   "questions. Decide what to do with a message posted in reply to the service "
-                  "offer.\n\n" + UNTRUSTED + "\n\n" + SPEC_GUIDE)
+                  "offer. One request may hold several questions: translate every one of them "
+                  "(up to 6) and they are all answered together in one reply. Never tell a requester "
+                  "to split questions up. Only clarify when something essential is truly missing; "
+                  "prefer the standard reading of a game mechanic. Earlier messages show what was "
+                  "already answered: only translate questions the new message newly asks.\n\n"
+                  + UNTRUSTED + "\n\n" + SPEC_GUIDE)
         user = (f"Earlier messages in this thread, for context:\n<untrusted>\n{context}\n</untrusted>\n\n"
                 f"The new message to decide on:\n<untrusted>\n{text}\n</untrusted>")
+        if feedback:
+            user += ("\n\nYour previous translation failed the engine's validation:\n" + feedback +
+                     "\nFix those specs if the mechanic is supported; otherwise leave that question "
+                     "out and name it in `message`.")
         return self._ask(RequestDecision, system, user)
 
     def rank_offers(self, need: str, offers: list[dict]) -> Ranking:

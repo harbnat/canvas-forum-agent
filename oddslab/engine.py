@@ -59,6 +59,9 @@ class DiceGroup(BaseModel):
                                    description="face values that are rerolled once (keep the reroll)")
     explode_on_max: bool = Field(default=False,
                                  description="rolling the maximum adds another roll of that die")
+    explode_limit: Optional[int] = Field(
+        default=None, description="if exploding: the most extra rolls one die can add (e.g. 2 when "
+                                  "the chain stops at three dice); omit for 'keeps exploding'")
 
 
 class Keep(BaseModel):
@@ -71,6 +74,9 @@ class Event(BaseModel):
     op: Optional[Op] = Field(default=None, description="comparison for total/face_count/card_count/suit_max")
     value: Optional[int] = Field(default=None, description="threshold for the comparison")
     face: Optional[int] = Field(default=None, description="face value counted by face_count")
+    faces: list[int] = Field(default_factory=list,
+                             description="face_count: count dice showing ANY of these faces "
+                                         "(e.g. [5, 6] for 'a 5 or 6 is a success'); use instead of face")
     category: Optional[Literal["rank", "suit", "card"]] = Field(
         default=None, description="card_count: count cards of one rank, one suit, or one specific card")
     category_value: Optional[str] = Field(default=None, description="e.g. 'A', 'hearts', 'A of spades'")
@@ -98,6 +104,16 @@ class Result:
     outcomes: int = 0
     distribution: dict[int, Fraction] = field(default_factory=dict)
     truncated_mass: Fraction = Fraction(0)
+    event_probability: Optional[Fraction] = None   # distribution questions that also name an event
+    distribution_of: str = "total"                 # "total" or "count"
+
+
+def counted_faces(ev: Event) -> set[int]:
+    return set(ev.faces) or ({ev.face} if ev.face is not None else set())
+
+
+def _limit(g: DiceGroup) -> int:
+    return EXPLODE_DEPTH if g.explode_limit is None else g.explode_limit
 
 
 # ----------------------------------------------------------------- helpers
@@ -116,7 +132,12 @@ def validate(spec: Spec) -> None:
     if needs_event and spec.event is None:
         raise SpecError("a probability needs an event")
     ev = spec.event
-    if ev and ev.kind in ("total", "face_count", "card_count", "suit_max") and (ev.op is None or ev.value is None):
+    count_dist = spec.question == "distribution" and ev is not None and ev.kind == "face_count"
+    if (ev and ev.kind in ("total", "face_count", "card_count", "suit_max")
+            and (ev.op is None) != (ev.value is None)):
+        raise SpecError(f"event '{ev.kind}' needs both a comparison and a value")
+    if (ev and ev.kind in ("total", "face_count", "card_count", "suit_max") and ev.op is None
+            and spec.question != "distribution"):
         raise SpecError(f"event '{ev.kind}' needs a comparison and a value")
     if spec.kind == "dice":
         if not 1 <= len(spec.dice) <= 4:
@@ -129,12 +150,16 @@ def validate(spec: Spec) -> None:
                 raise SpecError("dice must have 2-100 sides")
             if any(not 1 <= v <= g.sides for v in g.reroll_once) or len(set(g.reroll_once)) >= g.sides:
                 raise SpecError("reroll values must be real faces, and not every face")
+            if g.explode_limit is not None and not 0 <= g.explode_limit <= 6:
+                raise SpecError("explode_limit must be between 0 and 6")
         if spec.keep and not 1 <= spec.keep.n <= total:
             raise SpecError("can only keep between 1 and all of the dice")
         if ev and ev.kind not in ("total", "all_equal", "face_count"):
             raise SpecError(f"event '{ev.kind}' does not apply to dice")
-        if ev and ev.kind == "face_count" and ev.face is None:
-            raise SpecError("face_count needs a face")
+        if ev and ev.kind == "face_count" and not counted_faces(ev):
+            raise SpecError("face_count needs the face(s) to count")
+        if count_dist and spec.keep is None and any(g.explode_on_max for g in spec.dice):
+            raise SpecError("count distributions are not supported for exploding dice")
     elif spec.kind == "cards":
         if not (1 <= spec.ranks <= 13 and 1 <= spec.suits <= 4):
             raise SpecError("deck must have 1-13 ranks and 1-4 suits")
@@ -166,11 +191,11 @@ def die_distribution(g: DiceGroup, mutant: str | None = None) -> dict[int, Fract
         p_rr = Fraction(len(rr), s)
         dist = {v: (Fraction(0) if v in rr else one) + p_rr * one for v in range(1, s + 1)}
     if g.explode_on_max:
-        base, out = dist, {}
+        base, out, limit = dist, {}, _limit(g)
 
         def chain(total: int, depth: int, prob: Fraction) -> None:
             for v, p in base.items():
-                if v == s and depth < EXPLODE_DEPTH:
+                if v == s and depth < limit:
                     chain(total + v, depth + 1, prob * p)
                 else:
                     out[total + v] = out.get(total + v, Fraction(0)) + prob * p
@@ -196,7 +221,10 @@ def _dice_event(kept: tuple[int, ...], total: int, ev: Event, mutant: str | None
     if ev.kind == "all_equal":
         return len(set(kept)) == 1
     if ev.kind == "face_count":
-        return _cmp(ev.op, sum(1 for v in kept if v == ev.face), ev.value, mutant)
+        if ev.op is None:
+            return False
+        faces = counted_faces(ev)
+        return _cmp(ev.op, sum(1 for v in kept if v in faces), ev.value, mutant)
     raise SpecError(f"event '{ev.kind}' does not apply to dice")
 
 
@@ -212,8 +240,11 @@ def compute_dice(spec: Spec, mutant: str | None = None) -> Result:
     dists = [die_distribution(g, mutant) for g in spec.dice for _ in range(g.count)]
     ev = spec.event
     truncated = sum((Fraction(1, g.sides) ** (EXPLODE_DEPTH + 1)) * g.count
-                    for g in spec.dice if g.explode_on_max and mutant != "ignore_reroll_explode")
+                    for g in spec.dice if g.explode_on_max and g.explode_limit is None
+                    and mutant != "ignore_reroll_explode")
     simple = spec.keep is None and (ev is None or ev.kind == "total")
+    count_dist = spec.question == "distribution" and ev is not None and ev.kind == "face_count"
+    counts: dict[int, Fraction] = {}
 
     totals: dict[int, Fraction] = {}
     p_event = Fraction(0)
@@ -222,7 +253,7 @@ def compute_dice(spec: Spec, mutant: str | None = None) -> Result:
         for d in dists:
             acc = _convolve(acc, d)
         totals = {t + spec.modifier: p for t, p in acc.items()}
-        if ev is not None:
+        if ev is not None and ev.op is not None:
             p_event = sum((p for t, p in totals.items() if _cmp(ev.op, t, ev.value, mutant)), Fraction(0))
         outcomes = math.prod(len(d) for d in dists)
         method = "exact convolution of the per-die distributions"
@@ -242,8 +273,14 @@ def compute_dice(spec: Spec, mutant: str | None = None) -> Result:
             totals[total] = totals.get(total, Fraction(0)) + prob
             if ev is not None and _dice_event(kept, total, ev, mutant):
                 p_event += prob
+            if count_dist:
+                k = sum(1 for v in kept if v in counted_faces(ev))
+                counts[k] = counts.get(k, Fraction(0)) + prob
         method = f"exact enumeration of all {outcomes:,} outcomes"
-    return _finish(spec, totals, p_event, method, outcomes, truncated)
+    res = _finish(spec, counts if count_dist else totals, p_event, method, outcomes, truncated)
+    if count_dist:
+        res.distribution_of = "count"
+    return res
 
 
 def _finish(spec: Spec, totals: dict[int, Fraction], p_event: Fraction, method: str,
@@ -260,8 +297,11 @@ def _finish(spec: Spec, totals: dict[int, Fraction], p_event: Fraction, method: 
     else:  # distribution: report the mean as the headline number
         value = sum((t * p for t, p in totals.items()), Fraction(0))
     dist = dict(sorted(totals.items())) if spec.question == "distribution" else {}
+    ev = spec.event
+    extra = (p_event if spec.question == "distribution" and ev is not None
+             and (ev.op is not None or ev.kind == "all_equal") else None)
     return Result(value=value, question=spec.question, method=method, outcomes=outcomes,
-                  distribution=dist, truncated_mass=truncated)
+                  distribution=dist, truncated_mass=truncated, event_probability=extra)
 
 
 # -------------------------------------------------------------------- cards
@@ -367,7 +407,7 @@ def _roll(rng: random.Random, g: DiceGroup) -> int:
         if v in g.reroll_once:
             v = rng.randint(1, g.sides)
         total += v
-        if g.explode_on_max and v == g.sides and depth < EXPLODE_DEPTH:
+        if g.explode_on_max and v == g.sides and depth < _limit(g):
             depth += 1
             continue
         return total
@@ -382,13 +422,15 @@ def _sample_once(spec: Spec, rng: random.Random) -> tuple[bool, float]:
             values = sorted(values, reverse=spec.keep.which == "highest")[: spec.keep.n]
         total = sum(values) + spec.modifier
         hit = False
-        if ev is not None:
-            if ev.kind == "total":
-                hit = OPS[ev.op](total, ev.value)
-            elif ev.kind == "all_equal":
-                hit = len(set(values)) == 1
-            else:
-                hit = OPS[ev.op](values.count(ev.face), ev.value)
+        if ev is not None and ev.kind == "face_count":
+            k = sum(1 for v in values if v in counted_faces(ev))
+            if spec.question == "distribution":
+                total = k
+            hit = ev.op is not None and OPS[ev.op](k, ev.value)
+        elif ev is not None and ev.kind == "total":
+            hit = ev.op is not None and OPS[ev.op](total, ev.value)
+        elif ev is not None:
+            hit = len(set(values)) == 1
         return hit, total
     deck = [(r, s) for r in range(spec.ranks) for s in range(spec.suits)]
     hand = rng.sample(deck, spec.draw)
@@ -443,15 +485,18 @@ def _brute(spec: Spec) -> Check | None:
             vals = vals[: spec.keep.n] if spec.keep else list(roll)
             total = sum(vals) + spec.modifier
             n += 1
+            if ev is not None and ev.kind == "face_count":
+                k = sum(vals.count(f) for f in set(ev.faces or [ev.face]))
+                tot += k if spec.question == "distribution" else total
+                hits += ev.op is not None and OPS[ev.op](k, ev.value)
+                continue
             tot += total
             if ev is None:
                 continue
             if ev.kind == "total":
-                hits += OPS[ev.op](total, ev.value)
-            elif ev.kind == "all_equal":
-                hits += len(set(vals)) == 1
+                hits += ev.op is not None and OPS[ev.op](total, ev.value)
             else:
-                hits += OPS[ev.op](vals.count(ev.face), ev.value)
+                hits += len(set(vals)) == 1
         return _brute_result(spec, hits, tot, n)
     N = spec.ranks * spec.suits
     if math.comb(N, spec.draw) > MAX_BRUTE:
@@ -527,7 +572,8 @@ def describe(spec: Spec) -> str:
             if g.reroll_once:
                 s += f" (reroll {', '.join(map(str, g.reroll_once))} once)"
             if g.explode_on_max:
-                s += " (exploding)"
+                s += (" (exploding)" if g.explode_limit is None
+                      else f" (exploding, at most {g.explode_limit} extra roll{'s' if g.explode_limit != 1 else ''})")
             parts.append(s)
         what = " + ".join(parts)
         if spec.keep:
@@ -547,7 +593,10 @@ def describe(spec: Spec) -> str:
     elif ev.kind == "all_equal":
         cond = "all kept dice equal"
     elif ev.kind == "face_count":
-        cond = f"number of {ev.face}s {ev.op} {ev.value}"
+        faces = " or ".join(str(f) for f in sorted(counted_faces(ev)))
+        cond = f"number of dice showing {faces}" + (f" {ev.op} {ev.value}" if ev.op else "")
+        if spec.question == "distribution":
+            subject = f"number of dice showing {faces}"
     elif ev.kind == "card_count":
         cond = f"number of {ev.category_value or ev.category} cards {ev.op} {ev.value}"
     elif ev.kind == "rank_pattern":

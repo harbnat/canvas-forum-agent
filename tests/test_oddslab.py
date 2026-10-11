@@ -15,7 +15,7 @@ from agent.events import EventLog
 from oddslab import agent as oa
 from oddslab import engine, texts
 from oddslab.engine import DiceGroup, Event, Keep, Spec
-from oddslab.llm import Case, Cases, OfferScore, Ranking, ReplyKind, RequestDecision
+from oddslab.llm import Case, Cases, OfferScore, Question, Ranking, ReplyKind, RequestDecision
 from oddslab.store import Store
 
 from .fakes import ME, PAUSED, FakeCanvas
@@ -50,8 +50,8 @@ class FakeLLM:
         self.parsed: list[Cases] = []
         self.calls: list[str] = []
 
-    def interpret_request(self, text, context):
-        self.calls.append("interpret")
+    def interpret_request(self, text, context, feedback=""):
+        self.calls.append("interpret-retry" if feedback else "interpret")
         return self.decisions.pop(0)
 
     def rank_offers(self, need, offers):
@@ -221,7 +221,8 @@ def test_serves_a_request_with_exact_answer(env):
     offer = int(env["store"].get("offer_entry_id"))
     req = env["canvas"].add(PEER, "What is the chance 2d6 totals exactly 7?", offer, name="Peer")
     env["llm"].decisions = [RequestDecision(action="compute", restated="P(2d6 total = 7)",
-                                            spec=TWO_D6_SEVEN)]
+                                            questions=[Question(label="Q1", restated="P(2d6 = 7)",
+                                                                spec=TWO_D6_SEVEN)])]
     env["clock"]["offset"] = 2 * 3600
     env["make"]().run_cycle()
     answers = [e for e in env["canvas"].mine() if e["parent_id"] == req]
@@ -361,3 +362,71 @@ def test_provider_question_answered_at_most_twice(env):
     env["make"]().run_cycle()
     answers = [w for w in store.db.execute("SELECT * FROM writes WHERE purpose='answer provider question'")]
     assert len(answers) == 2
+
+
+def q(label, spec):
+    return Question(label=label, restated=label, spec=spec)
+
+
+def serve(env, text, *decisions):
+    env["make"]().run_cycle()
+    offer = int(env["store"].get("offer_entry_id"))
+    req = env["canvas"].add(PEER, text, offer, name="Peer")
+    env["llm"].decisions = list(decisions)
+    env["clock"]["offset"] += 2 * 3600
+    env["make"]().run_cycle()
+    return req, [e for e in env["canvas"].mine() if e["parent_id"] == req]
+
+
+def test_answers_several_questions_in_one_reply(env):
+    pool = Spec(kind="dice", dice=[DiceGroup(count=6, sides=6)],
+                event=Event(kind="face_count", faces=[5, 6], op=">=", value=3))
+    capped = Spec(kind="dice", question="expectation",
+                  dice=[DiceGroup(count=1, sides=6, explode_on_max=True, explode_limit=2)])
+    req, out = serve(env, "three questions", RequestDecision(
+        action="compute", restated="three questions",
+        questions=[q("(1)", PAIR), q("(2)", pool), q("(3)", capped)]))
+    assert len(out) == 1
+    body = text_of(out[0])
+    assert "2053/4165" in body and "233/729" in body and "301/72" in body
+    assert "(3):" in body
+
+
+def test_retries_once_when_engine_rejects_the_translation(env):
+    bad = Spec(kind="dice", dice=[DiceGroup(count=6, sides=6)], event=Event(kind="face_count", faces=[5, 6]))
+    good = Spec(kind="dice", dice=[DiceGroup(count=6, sides=6)],
+                event=Event(kind="face_count", faces=[5, 6], op=">=", value=3))
+    req, out = serve(env, "dice pool", RequestDecision(action="compute", restated="pool", questions=[q("Q", bad)]),
+                     RequestDecision(action="compute", restated="pool", questions=[q("Q", good)]))
+    assert env["llm"].calls.count("interpret-retry") == 1
+    assert "233/729" in text_of(out[0])
+
+
+def test_distribution_reports_requested_event_probability(env):
+    spec = Spec(kind="dice", question="distribution", dice=[DiceGroup(count=4, sides=6)],
+                keep=Keep(which="highest", n=3), event=Event(kind="total", op=">=", value=12))
+    req, out = serve(env, "4d6 drop lowest", RequestDecision(action="compute", restated="x",
+                                                             questions=[q("Q1", spec)]))
+    assert "799/1296" in text_of(out[0])
+
+
+def test_count_distribution(env):
+    spec = Spec(kind="dice", question="distribution", dice=[DiceGroup(count=6, sides=4)],
+                event=Event(kind="face_count", faces=[4]))
+    r = engine.compute(spec)
+    assert r.distribution[0] == Fraction(729, 4096) and sum(r.distribution.values()) == 1
+    req, out = serve(env, "count of 4s", RequestDecision(action="compute", restated="x",
+                                                         questions=[q("Q2", spec)]))
+    assert "Distribution of the count" in text_of(out[0])
+
+
+def test_identical_repeat_request_is_not_answered_twice(env):
+    d = lambda: RequestDecision(action="compute", restated="x", questions=[q("Q1", TWO_D6_SEVEN)])
+    req, out = serve(env, "2d6 = 7?", d())
+    offer = int(env["store"].get("offer_entry_id"))
+    again = env["canvas"].add(PEER, "2d6 = 7? (resent)", offer, name="Peer")
+    env["llm"].decisions = [d()]
+    env["clock"]["offset"] += 3 * 3600
+    env["make"]().run_cycle()
+    assert len(out) == 1
+    assert not [e for e in env["canvas"].mine() if e["parent_id"] == again]

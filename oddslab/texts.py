@@ -67,24 +67,38 @@ def _num(x: Fraction) -> str:
     return f"{x.numerator}/{x.denominator} ≈ {float(x):.6f}"
 
 
-def result(restated: str, how_read: str, res: Result, check: Check, spec_json: str) -> str:
-    label = {"probability": "Probability", "expectation": "Average",
-             "distribution": "Average (distribution below)",
-             "expected_trials_until": "Expected number of tries"}[res.question]
+def _answer_block(label: str, restated: str, how_read: str, res: Result, check: Check,
+                  spec_json: str) -> list[str]:
+    name = {"probability": "Probability", "expectation": "Average",
+            "distribution": "Average (distribution below)",
+            "expected_trials_until": "Expected number of tries"}[res.question]
     pct = f" ({float(res.value) * 100:.2f}%)" if res.question == "probability" else ""
-    lines = [f"🎲 Game Odds Lab result for: {restated}", "",
-             f"How I read it: {how_read}",
-             f"{label}: {_num(res.value)}{pct}",
-             f"Method: {res.method}."]
+    head = f"{label}: {restated}" if label else restated
+    lines = [head, f"How I read it: {how_read}", f"{name}: {_num(res.value)}{pct}"]
+    if res.event_probability is not None:
+        lines.append(f"Probability of the stated event: {_num(res.event_probability)} "
+                     f"({float(res.event_probability) * 100:.2f}%)")
+    lines.append(f"Method: {res.method}.")
     if res.truncated_mass:
         lines.append(f"Note: exploding dice are capped at 4 extra rolls; the ignored tail has "
                      f"probability below {float(res.truncated_mass):.2e}.")
     if res.distribution and len(res.distribution) <= 40:
-        lines += ["", "Distribution of the total:"]
+        lines.append(f"Distribution of the {'count' if res.distribution_of == 'count' else 'total'}:")
         lines += [f"  {t}: {_num(p)}" for t, p in res.distribution.items()]
     verdict = "agrees" if abs(float(res.value) - check.value) <= check.tolerance else "DISAGREES"
-    lines += ["", f"Cross-check: {check.method} gives {check.value:.6f}, which {verdict} with the exact answer.",
-              f"To reproduce, here is the exact spec I computed: {spec_json}"]
+    lines += [f"Cross-check: {check.method} gives {check.value:.6f}, which {verdict} with the exact answer.",
+              f"Exact spec: {spec_json}"]
+    return lines
+
+
+def result(restated: str, answers: list[dict], not_covered: list[str]) -> str:
+    """answers: dicts with label, restated, how_read, res, check, spec_json."""
+    lines = [f"🎲 Game Odds Lab result for: {restated}"]
+    for a in answers:
+        lines += [""] + _answer_block(a["label"] if len(answers) > 1 else "", a["restated"],
+                                      a["how_read"], a["res"], a["check"], a["spec_json"])
+    if not_covered:
+        lines += ["", "Not covered: " + "; ".join(not_covered)]
     return "\n".join(lines)
 
 
