@@ -36,6 +36,9 @@ MAX_WRITES_PER_CYCLE = 2
 REQUEST_HOURS = 48
 CORRECTION_HOURS = 24
 MIN_SCORE = 3
+# If nothing has scored MIN_SCORE after searching this long, accept the best adjacent offer.
+FALLBACK_SCORE = 2
+FALLBACK_AFTER_HOURS = 24
 MAX_HIRES = 3
 MAX_CASES = 20
 MIN_ACCEPTED = 3
@@ -425,19 +428,29 @@ class ServicesAgent:
         record = [{"entry_id": s.entry_id, "author": by_id[s.entry_id]["author"],
                    "score": max(0, min(5, s.score)), "reason": s.reason} for s in scored]
         best = next((s for s in scored if s.score >= MIN_SCORE), None)
+        fallback = False
+        if best is None:
+            first = self.store.events("discovery")
+            searching_h = (self.now() - first[0]["at"]) / 3600 if first else 0.0
+            if searching_h >= FALLBACK_AFTER_HOURS:
+                best = next((s for s in scored if s.score >= FALLBACK_SCORE), None)
+                fallback = best is not None
         self.store.log_event("discovery", {"cycle": self.cycle_id, "offers": len(offers),
-                                           "ranking": record, "chosen": best.entry_id if best else None})
+                                           "ranking": record, "chosen": best.entry_id if best else None,
+                                           "fallback": fallback})
         self.events.log(self.cycle_id, "discovery", offers=len(offers), ranking=record[:10],
                         chosen=best.entry_id if best else None)
         if best is None:
             self.notes.append(f"discovery: {len(offers)} offers, none scored {MIN_SCORE}+ for our task")
             return None
         o = by_id[best.entry_id]
-        self.notes.append(f"chose {o['author']} (offer {o['id']}, score {best.score}): {best.reason}")
+        self.notes.append(f"chose {o['author']} (offer {o['id']}, score {best.score}"
+                          f"{', fallback: nothing scored 3+ in 24h' if fallback else ''}): {best.reason}")
         if self.dry_run:
             return {"id": 0, "status": "chosen", "offer_entry_id": o["id"], "provider_id": o["user_id"],
-                    "provider_name": o["author"]}
-        hid = self.store.add_hire(o["id"], o["user_id"], o["author"], best.reason)
+                    "provider_name": o["author"], "reason": ("fallback: " if fallback else "") + best.reason}
+        hid = self.store.add_hire(o["id"], o["user_id"], o["author"],
+                                  ("fallback: " if fallback else "") + best.reason)
         return next(h for h in self.store.hires() if h["id"] == hid)
 
     def _send_request(self, hire) -> None:
@@ -447,7 +460,8 @@ class ServicesAgent:
             return
         deadline = self.now() + REQUEST_HOURS * 3600
         first_line = offer["text"].splitlines()[0] if offer["text"] else "your service"
-        body = texts.request(hire["provider_name"], first_line, deadline, len(engine.MUTANTS))
+        body = texts.request(hire["provider_name"], first_line, deadline, len(engine.MUTANTS),
+                             adjacent=str(hire["reason"] or "").startswith("fallback"))
         key = f"hire-{hire['id']}-request"
         posted = self.writer.post(key, "service request", hire["offer_entry_id"], body)
         if posted:

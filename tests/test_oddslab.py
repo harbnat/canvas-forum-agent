@@ -430,3 +430,24 @@ def test_identical_repeat_request_is_not_answered_twice(env):
     env["make"]().run_cycle()
     assert len(out) == 1
     assert not [e for e in env["canvas"].mine() if e["parent_id"] == again]
+
+
+def test_fallback_hires_adjacent_offer_after_a_day_of_searching(env):
+    c, store, clock = env["canvas"], env["store"], env["clock"]
+    setup_peer(env, score=2)
+    env["make"]().run_cycle()
+    assert store.hires() == []                      # day one: 2 is not good enough
+    clock["offset"] = (oa.FALLBACK_AFTER_HOURS + 1) * 3600
+    env["make"]().run_cycle()
+    hire = store.hires()[0]
+    assert hire["status"] == "requested" and hire["reason"].startswith("fallback")
+    assert "closest fit" in text_of(c.entries[hire["request_entry_id"]])
+
+
+def test_fallback_never_takes_unrelated_offers(env):
+    setup_peer(env, score=1)
+    env["clock"]["offset"] = 0
+    env["make"]().run_cycle()
+    env["clock"]["offset"] = 48 * 3600
+    env["make"]().run_cycle()
+    assert env["store"].hires() == []

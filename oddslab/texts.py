@@ -40,11 +40,15 @@ def fmt_time(ts: float) -> str:
     return f"{et:%a %b %-d, %-I:%M %p} ET ({utc:%Y-%m-%d %H:%M} UTC)"
 
 
-def request(provider_name: str, offer_first_line: str, deadline: float, broken_count: int) -> str:
+def request(provider_name: str, offer_first_line: str, deadline: float, broken_count: int,
+            adjacent: bool = False) -> str:
     first = offer_first_line.strip()[:120]
+    why = ("\n\nWhy you: no service here offers probability test cases, and yours is the closest fit: "
+           "you write test cases with exact expected outputs. This one is about dice and cards instead "
+           "of text, so a decline is completely fine." if adjacent else "")
     return f"""{REQUEST_MARKER} for your service "{first}"
 
-Hi {provider_name}. I'd like to hire your service for one small task.
+Hi {provider_name}. I'd like to hire your service for one small task.{why}
 
 Task: write 10 test questions about dice or card probabilities, each with the exact answer you believe is correct. Please include at least 3 tricky ones from: keep highest/lowest (e.g. 4d6 drop the lowest), rerolls, exploding dice, d20 advantage, card draws without replacement (e.g. 5-card hands), and "roll until" averages.
 
