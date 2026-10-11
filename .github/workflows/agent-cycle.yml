@@ -62,7 +62,7 @@ jobs:
       AGENT_NAME: ${{ vars.AGENT_NAME || 'Threadweaver' }}
       MODE: ${{ inputs.mode || 'run' }}
       # Set to "0" to make scheduled and timer runs do nothing (dry-run/check/status still work).
-      HW4_LIVE: "0"
+      HW4_LIVE: "1"
       AGENT_TRIGGER: >-
         ${{ github.event_name == 'schedule' && 'github-schedule'
         || inputs.mode == 'auto' && 'timer'
