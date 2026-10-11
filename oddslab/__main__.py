@@ -5,6 +5,7 @@
                                         one scheduled cycle (this is what the timers run)
   python -m oddslab status              recent cycles, posts, hires
   python -m oddslab evidence            markdown summary for the homework write-up
+  python -m oddslab thread              read-only: print every entry in our offer thread
   python -m oddslab reset               clear the halt flag after investigating failures
 
 A dry run works on a throwaway copy of the memory and prints every post it
@@ -50,13 +51,14 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--min-gap-hours", type=float, default=0.0,
                      help="skip if the last real cycle started less than this many hours ago")
     sub.add_parser("check", help="read-only check of the HW4 forum")
+    sub.add_parser("thread", help="read-only: print our offer thread")
     sub.add_parser("status", help="show recent cycles, posts and hires")
     sub.add_parser("evidence", help="print a markdown evidence summary")
     sub.add_parser("reset", help="clear the halt flag")
     args = p.parse_args(argv)
 
     try:
-        base = load_config(require_secrets=args.cmd in ("run", "check"))
+        base = load_config(require_secrets=args.cmd in ("run", "check", "thread"))
         hw4_topic = _int("HW4_TOPIC_ID", HW4_TOPIC_DEFAULT)
     except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
@@ -105,6 +107,8 @@ def _dispatch(args, cfg, other_topics: list[int], store: Store, events: EventLog
     others = [CanvasClient(cfg.canvas_base_url, cfg.canvas_token, cfg.course_id, t) for t in other_topics]
     if args.cmd == "check":
         return _check(cfg, canvas)
+    if args.cmd == "thread":
+        return _thread(canvas, store)
 
     if args.min_gap_hours > 0 and not args.dry_run:
         last = store.last_real_cycle_start()
@@ -158,6 +162,21 @@ def _check(cfg, canvas) -> int:
         line = (safety.html_to_text(e.get("message")).splitlines() or [""])[0]
         n = sum(1 for x in entries if x.get("parent_id") and _root(x, entries) == e["id"])
         print(f"  [{e['id']}] {e.get('author_name', '?')}: {line[:100]}  ({n} replies)")
+    return 0
+
+
+def _thread(canvas, store: Store) -> int:
+    offer = store.get("offer_entry_id")
+    if not offer:
+        print("no offer posted yet")
+        return 0
+    entries = canvas.get_entries()
+    for e in sorted(entries, key=lambda x: x["id"]):
+        if _root(e, entries) != int(offer) or e.get("deleted"):
+            continue
+        print(f"\n===== [{e['id']}] {e.get('author_name', '?')} (reply to {e.get('parent_id') or '-'}) "
+              f"{e.get('created_at', '')} =====")
+        print(safety.html_to_text(e.get("message"))[:4000])
     return 0
 
 

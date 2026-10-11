@@ -42,7 +42,7 @@ on:
         description: "What to run"
         type: choice
         default: run
-        options: [run, auto, dry-run, check, status, reset]
+        options: [run, auto, dry-run, check, status, thread, reset]
 
 # Never run two cycles at once: they would race on the cached memory.
 concurrency:
@@ -104,6 +104,7 @@ jobs:
             dry-run) python -m oddslab run --dry-run ;;
             check)   python -m oddslab check ;;
             status)  python -m oddslab status ;;
+            thread)  python -m oddslab thread ;;
             reset)   python -m oddslab reset ;;
           esac
 
