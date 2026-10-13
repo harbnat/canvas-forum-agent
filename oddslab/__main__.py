@@ -6,6 +6,7 @@
   python -m oddslab status              recent cycles, posts, hires
   python -m oddslab evidence            markdown summary for the homework write-up
   python -m oddslab thread              read-only: print every entry in our offer thread
+  python -m oddslab reopen ID [ID ...]  answer these requests once more (after an engine fix)
   python -m oddslab reset               clear the halt flag after investigating failures
 
 A dry run works on a throwaway copy of the memory and prints every post it
@@ -55,6 +56,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status", help="show recent cycles, posts and hires")
     sub.add_parser("evidence", help="print a markdown evidence summary")
     sub.add_parser("reset", help="clear the halt flag")
+    reopen = sub.add_parser("reopen", help="re-serve requests that were declined before an engine fix")
+    reopen.add_argument("entry_ids", type=int, nargs="+")
     args = p.parse_args(argv)
 
     try:
@@ -94,6 +97,16 @@ def _dispatch(args, cfg, other_topics: list[int], store: Store, events: EventLog
         return _status(cfg, store)
     if args.cmd == "evidence":
         return _evidence(cfg, store)
+    if args.cmd == "reopen":
+        for eid in args.entry_ids:
+            if store.get(f"reopen:{eid}"):
+                print(f"{eid}: already reopened once; skipping")
+                continue
+            store.unmark_handled(eid)
+            store.set(f"reopen:{eid}", "1")
+            events.log("manual", "reopen", entry_id=eid)
+            print(f"{eid}: will be answered again on the next cycle")
+        return 0
     if args.cmd == "reset":
         store.set("halted", "0")
         store.set("consecutive_failures", "0")

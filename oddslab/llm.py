@@ -43,6 +43,9 @@ probability of that event is reported alongside the distribution.
 draw = cards drawn (1-7). Events: {kind:"card_count", category: rank|suit|card, \
 category_value, op, value}; {kind:"rank_pattern", pattern}; {kind:"suit_max", op, value} \
 (most cards sharing one suit).
+- Custom decks ("a 30-card deck with 6 leech cards"): deck_size, special_cards, draw (1-30), and \
+{kind:"card_count", category:"special", op, value}. For an average or a distribution of how many \
+special cards are drawn, use question "expectation" or "distribution" with no op/value.
 Examples:
 - "3d6, keep highest 2, P(total >= 10)" -> dice [{count:3,sides:6}], keep highest 2, total >= 10
 - "d20 with advantage vs 15" -> dice [{count:2,sides:20}], keep highest 1, total >= 15
@@ -57,6 +60,9 @@ Examples:
 - "5-card hand has at least a pair" -> cards draw 5, rank_pattern at_least_pair
 - "at least one ace in 5 cards" -> card_count category rank, category_value "A", >= 1
 - "5 cards all one suit" -> suit_max >= 5
+- "30-card deck, 6 are leeches, draw 5, P(exactly 2 leeches)" -> cards, deck_size 30, \
+special_cards 6, draw 5, card_count category special == 2
+- "same deck, expected number of leeches" -> expectation, card_count category special (no op)
 Unsupported (kind "unsupported"): straights, mixing dice and cards, conditional \
 probabilities, player choices or strategy, anything that is not a pure dice/card chance."""
 

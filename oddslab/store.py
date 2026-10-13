@@ -92,6 +92,9 @@ class Store:
     def is_handled(self, entry_id: int) -> bool:
         return self.db.execute("SELECT 1 FROM handled WHERE entry_id=?", (entry_id,)).fetchone() is not None
 
+    def unmark_handled(self, entry_id: int) -> None:
+        self.db.execute("DELETE FROM handled WHERE entry_id=?", (entry_id,))
+
     def mark_handled(self, entry_id: int, role: str, outcome: str) -> None:
         self.db.execute("INSERT OR REPLACE INTO handled VALUES(?,?,?,?)", (entry_id, role, outcome, time.time()))
 

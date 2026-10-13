@@ -451,3 +451,38 @@ def test_fallback_never_takes_unrelated_offers(env):
     env["clock"]["offset"] = 48 * 3600
     env["make"]().run_cycle()
     assert env["store"].hires() == []
+
+
+LEECH = Spec(kind="cards", deck_size=30, special_cards=6, draw=5,
+             event=Event(kind="card_count", category="special", op="==", value=2))
+
+
+def test_custom_deck_counts_special_cards():
+    from math import comb
+    assert engine.compute(LEECH).value == Fraction(comb(6, 2) * comb(24, 3), comb(30, 5))
+    avg = Spec(kind="cards", question="expectation", deck_size=30, special_cards=6, draw=5,
+               event=Event(kind="card_count", category="special"))
+    assert engine.compute(avg).value == 1
+    assert engine.agrees(engine.compute(LEECH).value, engine.independent_check(LEECH, 1))
+    with pytest.raises(engine.SpecError):
+        engine.compute(Spec(kind="cards", draw=5, event=Event(kind="card_count", category="special",
+                                                                 op=">=", value=1)))
+
+
+def test_reopened_request_is_answered_once_more_with_a_correction(env):
+    decline = RequestDecision(action="decline", restated="leeches", message="custom decks unsupported")
+    req, out = serve(env, "30-card deck, 6 leeches", decline)
+    assert len(out) == 1 and "can't take" in text_of(out[0])
+    store = env["store"]
+    store.unmark_handled(req)
+    store.set(f"reopen:{req}", "1")
+    env["llm"].decisions = [RequestDecision(action="compute", restated="leeches", questions=[q("Q1", LEECH)])]
+    env["clock"]["offset"] += 3 * 3600
+    env["make"]().run_cycle()
+    replies = [e for e in env["canvas"].mine() if e["parent_id"] == req]
+    assert len(replies) == 2
+    assert text_of(replies[1]).startswith("Update: my earlier decline was wrong")
+    assert store.get(f"reopen:{req}") == "done"
+    env["clock"]["offset"] += 3 * 3600
+    env["make"]().run_cycle()                       # never answered a third time
+    assert len([e for e in env["canvas"].mine() if e["parent_id"] == req]) == 2

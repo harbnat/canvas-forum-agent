@@ -77,8 +77,9 @@ class Event(BaseModel):
     faces: list[int] = Field(default_factory=list,
                              description="face_count: count dice showing ANY of these faces "
                                          "(e.g. [5, 6] for 'a 5 or 6 is a success'); use instead of face")
-    category: Optional[Literal["rank", "suit", "card"]] = Field(
-        default=None, description="card_count: count cards of one rank, one suit, or one specific card")
+    category: Optional[Literal["rank", "suit", "card", "special"]] = Field(
+        default=None, description="card_count: count cards of one rank, one suit, one specific card, "
+                                  "or (custom decks) the special cards")
     category_value: Optional[str] = Field(default=None, description="e.g. 'A', 'hearts', 'A of spades'")
     pattern: Optional[RankPattern] = None
 
@@ -92,6 +93,10 @@ class Spec(BaseModel):
     draw: Optional[int] = Field(default=None, description="cards drawn without replacement")
     ranks: int = 13
     suits: int = 4
+    deck_size: Optional[int] = Field(default=None, description="custom deck: total number of cards "
+                                     "(use with special_cards instead of ranks/suits)")
+    special_cards: Optional[int] = Field(default=None, description="custom deck: how many of the cards "
+                                         "are the special kind being counted")
     event: Optional[Event] = None
     note: str = Field(default="", description="if unsupported: why")
 
@@ -137,7 +142,8 @@ def validate(spec: Spec) -> None:
             and (ev.op is None) != (ev.value is None)):
         raise SpecError(f"event '{ev.kind}' needs both a comparison and a value")
     if (ev and ev.kind in ("total", "face_count", "card_count", "suit_max") and ev.op is None
-            and spec.question != "distribution"):
+            and spec.question != "distribution"
+            and not (spec.question == "expectation" and ev.kind == "card_count")):
         raise SpecError(f"event '{ev.kind}' needs a comparison and a value")
     if spec.kind == "dice":
         if not 1 <= len(spec.dice) <= 4:
@@ -161,18 +167,31 @@ def validate(spec: Spec) -> None:
         if count_dist and spec.keep is None and any(g.explode_on_max for g in spec.dice):
             raise SpecError("count distributions are not supported for exploding dice")
     elif spec.kind == "cards":
-        if not (1 <= spec.ranks <= 13 and 1 <= spec.suits <= 4):
-            raise SpecError("deck must have 1-13 ranks and 1-4 suits")
-        if spec.draw is None or not 1 <= spec.draw <= min(7, spec.ranks * spec.suits):
-            raise SpecError("draw between 1 and 7 cards")
+        custom = spec.deck_size is not None
+        if custom:
+            if not 1 <= spec.deck_size <= 1000:
+                raise SpecError("custom decks must have 1-1000 cards")
+            if spec.special_cards is None or not 0 <= spec.special_cards <= spec.deck_size:
+                raise SpecError("a custom deck needs special_cards between 0 and deck_size")
+            if spec.draw is None or not 1 <= spec.draw <= min(30, spec.deck_size):
+                raise SpecError("draw between 1 and 30 cards (and no more than the deck)")
+            if ev is None or ev.kind != "card_count" or ev.category != "special":
+                raise SpecError("custom decks support counting the special cards (card_count, category special)")
+        else:
+            if not (1 <= spec.ranks <= 13 and 1 <= spec.suits <= 4):
+                raise SpecError("deck must have 1-13 ranks and 1-4 suits")
+            if spec.draw is None or not 1 <= spec.draw <= min(7, spec.ranks * spec.suits):
+                raise SpecError("draw between 1 and 7 cards")
         if ev is None or ev.kind not in ("card_count", "rank_pattern", "suit_max"):
             raise SpecError("card questions need a card_count, rank_pattern or suit_max event")
         if ev.kind == "card_count" and ev.category is None:
-            raise SpecError("card_count needs a category (rank, suit or card)")
+            raise SpecError("card_count needs a category (rank, suit, card or special)")
+        if ev.kind == "card_count" and ev.category == "special" and not custom:
+            raise SpecError("category 'special' needs a custom deck (deck_size and special_cards)")
         if ev.kind == "rank_pattern" and ev.pattern is None:
             raise SpecError("rank_pattern needs a pattern")
-        if spec.question == "distribution":
-            raise SpecError("distributions are supported for dice totals only")
+        if spec.question == "distribution" and ev.kind != "card_count":
+            raise SpecError("card distributions are supported for card counts only")
         if spec.question == "expectation" and ev.kind != "card_count":
             raise SpecError("averages for cards are supported for card counts only")
 
@@ -341,12 +360,18 @@ def _rank_pattern(counts: tuple[int, ...], pattern: str) -> bool:
 
 def _category_size(spec: Spec) -> int:
     cat = spec.event.category
+    if cat == "special":
+        return spec.special_cards
     return spec.suits if cat == "rank" else spec.ranks if cat == "suit" else 1
+
+
+def _deck_size(spec: Spec) -> int:
+    return spec.deck_size if spec.deck_size is not None else spec.ranks * spec.suits
 
 
 def compute_cards(spec: Spec, mutant: str | None = None) -> Result:
     R, S, n = spec.ranks, spec.suits, spec.draw
-    N = R * S
+    N = _deck_size(spec)
     ev = spec.event
     replace = mutant == "cards_with_replacement"
     total_ways = math.comb(N, n)
@@ -361,10 +386,13 @@ def compute_cards(spec: Spec, mutant: str | None = None) -> Result:
                 p = Fraction(math.comb(K, k) * math.comb(N - K, n - k), total_ways)
             if p:
                 dist[k] = p
-        p_event = sum((p for k, p in dist.items() if _cmp(ev.op, k, ev.value, mutant)), Fraction(0))
+        p_event = (sum((p for k, p in dist.items() if _cmp(ev.op, k, ev.value, mutant)), Fraction(0))
+                   if ev.op is not None else Fraction(0))
         method = ("binomial (with replacement)" if replace else
                   f"hypergeometric count over all {total_ways:,} hands")
-        return _finish(spec, dist, p_event, method, total_ways)
+        res = _finish(spec, dist, p_event, method, total_ways)
+        res.distribution_of = "count"
+        return res
 
     groups, cap = (R, S) if ev.kind == "rank_pattern" else (S, R)
     p_event = Fraction(0)
@@ -432,6 +460,10 @@ def _sample_once(spec: Spec, rng: random.Random) -> tuple[bool, float]:
         elif ev is not None:
             hit = len(set(values)) == 1
         return hit, total
+    if spec.deck_size is not None:
+        hand = rng.sample(range(spec.deck_size), spec.draw)
+        k = sum(1 for c in hand if c < spec.special_cards)
+        return ev.op is not None and OPS[ev.op](k, ev.value), k
     deck = [(r, s) for r in range(spec.ranks) for s in range(spec.suits)]
     hand = rng.sample(deck, spec.draw)
     if ev.kind == "card_count":
@@ -441,7 +473,7 @@ def _sample_once(spec: Spec, rng: random.Random) -> tuple[bool, float]:
             k = sum(1 for _, s in hand if s == 0)
         else:
             k = sum(1 for c in hand if c == (0, 0))
-        return OPS[ev.op](k, ev.value), k
+        return ev.op is not None and OPS[ev.op](k, ev.value), k
     if ev.kind == "rank_pattern":
         counts = [sum(1 for r, _ in hand if r == x) for x in range(spec.ranks)]
         return _rank_pattern(tuple(counts), ev.pattern), 0
@@ -498,10 +530,17 @@ def _brute(spec: Spec) -> Check | None:
             else:
                 hits += len(set(vals)) == 1
         return _brute_result(spec, hits, tot, n)
-    N = spec.ranks * spec.suits
+    N = _deck_size(spec)
     if math.comb(N, spec.draw) > MAX_BRUTE:
         return None
     hits = qty = n = 0
+    if spec.deck_size is not None:
+        for hand in combinations(range(N), spec.draw):
+            k = sum(1 for c in hand if c < spec.special_cards)
+            n += 1
+            qty += k
+            hits += ev.op is not None and OPS[ev.op](k, ev.value)
+        return _brute_result(spec, hits, qty, n)
     for hand in combinations(range(N), spec.draw):
         ranks = [c % spec.ranks for c in hand]
         suits = [c // spec.ranks for c in hand]
@@ -510,7 +549,7 @@ def _brute(spec: Spec) -> Check | None:
             k = (ranks.count(0) if ev.category == "rank" else
                  suits.count(0) if ev.category == "suit" else hand.count(0))
             qty += k
-            hits += OPS[ev.op](k, ev.value)
+            hits += ev.op is not None and OPS[ev.op](k, ev.value)
         elif ev.kind == "rank_pattern":
             hits += _rank_pattern(tuple(ranks.count(x) for x in range(spec.ranks)), ev.pattern)
         else:
@@ -582,8 +621,10 @@ def describe(spec: Spec) -> str:
             what += f", {'+' if spec.modifier > 0 else ''}{spec.modifier}"
         subject = "total"
     else:
-        deck = "standard 52-card deck" if (spec.ranks, spec.suits) == (13, 4) else \
-            f"{spec.ranks}-rank x {spec.suits}-suit deck"
+        deck = (f"{spec.deck_size}-card deck with {spec.special_cards} special cards"
+                if spec.deck_size is not None else
+                "standard 52-card deck" if (spec.ranks, spec.suits) == (13, 4) else
+                f"{spec.ranks}-rank x {spec.suits}-suit deck")
         what = f"draw {spec.draw} cards from a {deck} without replacement"
         subject = "count"
     if ev is None:
@@ -598,7 +639,9 @@ def describe(spec: Spec) -> str:
         if spec.question == "distribution":
             subject = f"number of dice showing {faces}"
     elif ev.kind == "card_count":
-        cond = f"number of {ev.category_value or ev.category} cards {ev.op} {ev.value}"
+        name = "special" if ev.category == "special" else (ev.category_value or ev.category)
+        cond = f"number of {name} cards" + (f" {ev.op} {ev.value}" if ev.op else "")
+        subject = f"number of {name} cards"
     elif ev.kind == "rank_pattern":
         cond = ev.pattern.replace("_", " ")
     else:

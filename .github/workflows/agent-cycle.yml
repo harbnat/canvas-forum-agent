@@ -42,7 +42,11 @@ on:
         description: "What to run"
         type: choice
         default: run
-        options: [run, auto, dry-run, check, status, thread, reset]
+        options: [run, auto, dry-run, check, status, thread, reopen, reset]
+      entry_ids:
+        description: "Entry ids for mode=reopen (space-separated)"
+        type: string
+        default: ""
 
 # Never run two cycles at once: they would race on the cached memory.
 concurrency:
@@ -61,6 +65,7 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       AGENT_NAME: ${{ vars.AGENT_NAME || 'Threadweaver' }}
       MODE: ${{ inputs.mode || 'run' }}
+      ENTRY_IDS: ${{ inputs.entry_ids || '' }}
       # Set to "0" to make scheduled and timer runs do nothing (dry-run/check/status still work).
       HW4_LIVE: "1"
       AGENT_TRIGGER: >-
@@ -105,6 +110,7 @@ jobs:
             check)   python -m oddslab check ;;
             status)  python -m oddslab status ;;
             thread)  python -m oddslab thread ;;
+            reopen)  python -m oddslab reopen $ENTRY_IDS ;;  # argparse accepts integers only
             reset)   python -m oddslab reset ;;
           esac
 

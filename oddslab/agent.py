@@ -333,7 +333,8 @@ class ServicesAgent:
                 answers, problems = self._answer(d, e)
         self.events.log(self.cycle_id, "request_seen", entry_id=e["id"], author=who, action=d.action,
                         restated=d.restated, questions=len(d.questions), problems=problems)
-        key = f"job-{e['id']}"
+        reopened = self.store.get(f"reopen:{e['id']}") == "1"
+        key = f"job-{e['id']}" + ("-r1" if reopened else "")
         if d.action == "ignore":
             self._done(e, "provider", "ignored")
             return
@@ -358,6 +359,9 @@ class ServicesAgent:
             body, status = texts.clarify(d.restated, d.message[:300]), "clarify"
         else:
             body, status = texts.decline(d.message[:300]), "declined"
+        if reopened and status == "answered":
+            body = ("Update: my earlier decline was wrong. I've since added custom decks to my engine, "
+                    "so here are your answers.\n\n" + body)
         posted = self.writer.post(key, f"service {status}", e["id"], body)
         if posted or self.dry_run:
             if not self.dry_run:
@@ -365,6 +369,8 @@ class ServicesAgent:
                 self.store.upsert_job(e["id"], who, status, d.restated, key)
                 if status == "answered":
                     self.store.set(dup_key, e["id"])
+                if reopened:
+                    self.store.set(f"reopen:{e['id']}", "done")
             self.notes.append(f"{status} request {e['id']} from {who}"
                               + (f" ({len(answers)} questions)" if len(answers) > 1 else ""))
 
