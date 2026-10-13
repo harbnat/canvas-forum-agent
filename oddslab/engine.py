@@ -59,9 +59,9 @@ class DiceGroup(BaseModel):
                                    description="face values that are rerolled once (keep the reroll)")
     explode_on_max: bool = Field(default=False,
                                  description="rolling the maximum adds another roll of that die")
-    explode_limit: Optional[int] = Field(
-        default=None, description="if exploding: the most extra rolls one die can add (e.g. 2 when "
-                                  "the chain stops at three dice); omit for 'keeps exploding'")
+    explode_limit: int = Field(
+        default=-1, description="if exploding: the most extra rolls one die can add (e.g. 2 when "
+                                "the chain stops at three dice); -1 for 'keeps exploding'")
 
 
 class Keep(BaseModel):
@@ -73,7 +73,7 @@ class Event(BaseModel):
     kind: Literal["total", "all_equal", "face_count", "card_count", "rank_pattern", "suit_max"]
     op: Optional[Op] = Field(default=None, description="comparison for total/face_count/card_count/suit_max")
     value: Optional[int] = Field(default=None, description="threshold for the comparison")
-    face: Optional[int] = Field(default=None, description="face value counted by face_count")
+    face: int = Field(default=0, description="face value counted by face_count (0 = use faces)")
     faces: list[int] = Field(default_factory=list,
                              description="face_count: count dice showing ANY of these faces "
                                          "(e.g. [5, 6] for 'a 5 or 6 is a success'); use instead of face")
@@ -90,13 +90,12 @@ class Spec(BaseModel):
     dice: list[DiceGroup] = Field(default_factory=list)
     keep: Optional[Keep] = None
     modifier: int = 0
-    draw: Optional[int] = Field(default=None, description="cards drawn without replacement")
+    draw: int = Field(default=0, description="cards drawn without replacement")
     ranks: int = 13
     suits: int = 4
-    deck_size: Optional[int] = Field(default=None, description="custom deck: total number of cards "
-                                     "(use with special_cards instead of ranks/suits)")
-    special_cards: Optional[int] = Field(default=None, description="custom deck: how many of the cards "
-                                         "are the special kind being counted")
+    deck_size: int = Field(default=0, description="custom deck: total number of cards, used with "
+                                                  "special_cards instead of ranks/suits (0 = standard deck)")
+    special_cards: int = Field(default=0, description="custom deck: how many cards are the special kind")
     event: Optional[Event] = None
     note: str = Field(default="", description="if unsupported: why")
 
@@ -114,11 +113,11 @@ class Result:
 
 
 def counted_faces(ev: Event) -> set[int]:
-    return set(ev.faces) or ({ev.face} if ev.face is not None else set())
+    return set(ev.faces) or ({ev.face} if ev.face else set())
 
 
 def _limit(g: DiceGroup) -> int:
-    return EXPLODE_DEPTH if g.explode_limit is None else g.explode_limit
+    return EXPLODE_DEPTH if g.explode_limit < 0 else g.explode_limit
 
 
 # ----------------------------------------------------------------- helpers
@@ -156,8 +155,8 @@ def validate(spec: Spec) -> None:
                 raise SpecError("dice must have 2-100 sides")
             if any(not 1 <= v <= g.sides for v in g.reroll_once) or len(set(g.reroll_once)) >= g.sides:
                 raise SpecError("reroll values must be real faces, and not every face")
-            if g.explode_limit is not None and not 0 <= g.explode_limit <= 6:
-                raise SpecError("explode_limit must be between 0 and 6")
+            if g.explode_limit > 6:
+                raise SpecError("explode_limit must be at most 6")
         if spec.keep and not 1 <= spec.keep.n <= total:
             raise SpecError("can only keep between 1 and all of the dice")
         if ev and ev.kind not in ("total", "all_equal", "face_count"):
@@ -167,20 +166,20 @@ def validate(spec: Spec) -> None:
         if count_dist and spec.keep is None and any(g.explode_on_max for g in spec.dice):
             raise SpecError("count distributions are not supported for exploding dice")
     elif spec.kind == "cards":
-        custom = spec.deck_size is not None
+        custom = spec.deck_size > 0
         if custom:
             if not 1 <= spec.deck_size <= 1000:
                 raise SpecError("custom decks must have 1-1000 cards")
-            if spec.special_cards is None or not 0 <= spec.special_cards <= spec.deck_size:
+            if not 0 <= spec.special_cards <= spec.deck_size:
                 raise SpecError("a custom deck needs special_cards between 0 and deck_size")
-            if spec.draw is None or not 1 <= spec.draw <= min(30, spec.deck_size):
+            if not 1 <= spec.draw <= min(30, spec.deck_size):
                 raise SpecError("draw between 1 and 30 cards (and no more than the deck)")
             if ev is None or ev.kind != "card_count" or ev.category != "special":
                 raise SpecError("custom decks support counting the special cards (card_count, category special)")
         else:
             if not (1 <= spec.ranks <= 13 and 1 <= spec.suits <= 4):
                 raise SpecError("deck must have 1-13 ranks and 1-4 suits")
-            if spec.draw is None or not 1 <= spec.draw <= min(7, spec.ranks * spec.suits):
+            if not 1 <= spec.draw <= min(7, spec.ranks * spec.suits):
                 raise SpecError("draw between 1 and 7 cards")
         if ev is None or ev.kind not in ("card_count", "rank_pattern", "suit_max"):
             raise SpecError("card questions need a card_count, rank_pattern or suit_max event")
@@ -259,7 +258,7 @@ def compute_dice(spec: Spec, mutant: str | None = None) -> Result:
     dists = [die_distribution(g, mutant) for g in spec.dice for _ in range(g.count)]
     ev = spec.event
     truncated = sum((Fraction(1, g.sides) ** (EXPLODE_DEPTH + 1)) * g.count
-                    for g in spec.dice if g.explode_on_max and g.explode_limit is None
+                    for g in spec.dice if g.explode_on_max and g.explode_limit < 0
                     and mutant != "ignore_reroll_explode")
     simple = spec.keep is None and (ev is None or ev.kind == "total")
     count_dist = spec.question == "distribution" and ev is not None and ev.kind == "face_count"
@@ -366,7 +365,7 @@ def _category_size(spec: Spec) -> int:
 
 
 def _deck_size(spec: Spec) -> int:
-    return spec.deck_size if spec.deck_size is not None else spec.ranks * spec.suits
+    return spec.deck_size if spec.deck_size > 0 else spec.ranks * spec.suits
 
 
 def compute_cards(spec: Spec, mutant: str | None = None) -> Result:
@@ -460,7 +459,7 @@ def _sample_once(spec: Spec, rng: random.Random) -> tuple[bool, float]:
         elif ev is not None:
             hit = len(set(values)) == 1
         return hit, total
-    if spec.deck_size is not None:
+    if spec.deck_size > 0:
         hand = rng.sample(range(spec.deck_size), spec.draw)
         k = sum(1 for c in hand if c < spec.special_cards)
         return ev.op is not None and OPS[ev.op](k, ev.value), k
@@ -534,7 +533,7 @@ def _brute(spec: Spec) -> Check | None:
     if math.comb(N, spec.draw) > MAX_BRUTE:
         return None
     hits = qty = n = 0
-    if spec.deck_size is not None:
+    if spec.deck_size > 0:
         for hand in combinations(range(N), spec.draw):
             k = sum(1 for c in hand if c < spec.special_cards)
             n += 1
@@ -611,7 +610,7 @@ def describe(spec: Spec) -> str:
             if g.reroll_once:
                 s += f" (reroll {', '.join(map(str, g.reroll_once))} once)"
             if g.explode_on_max:
-                s += (" (exploding)" if g.explode_limit is None
+                s += (" (exploding)" if g.explode_limit < 0
                       else f" (exploding, at most {g.explode_limit} extra roll{'s' if g.explode_limit != 1 else ''})")
             parts.append(s)
         what = " + ".join(parts)
@@ -622,7 +621,7 @@ def describe(spec: Spec) -> str:
         subject = "total"
     else:
         deck = (f"{spec.deck_size}-card deck with {spec.special_cards} special cards"
-                if spec.deck_size is not None else
+                if spec.deck_size > 0 else
                 "standard 52-card deck" if (spec.ranks, spec.suits) == (13, 4) else
                 f"{spec.ranks}-rank x {spec.suits}-suit deck")
         what = f"draw {spec.draw} cards from a {deck} without replacement"
