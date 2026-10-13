@@ -13,7 +13,7 @@ from typing import Literal, Optional, Type, TypeVar
 import anthropic
 from pydantic import BaseModel, Field
 
-from .engine import Spec
+from .engine import LLMSchema, Spec
 
 log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
@@ -67,14 +67,14 @@ Unsupported (kind "unsupported"): straights, mixing dice and cards, conditional 
 probabilities, player choices or strategy, anything that is not a pure dice/card chance."""
 
 
-class Question(BaseModel):
+class Question(LLMSchema):
     label: str = Field(description="the requester's own label for this item, e.g. 'Q2' or '(1)'; "
                                    "else a short label")
     restated: str = Field(description="this question in one plain sentence")
     spec: Spec
 
 
-class RequestDecision(BaseModel):
+class RequestDecision(LLMSchema):
     action: Literal["compute", "clarify", "decline", "ignore"] = Field(
         description="compute: at least one dice/card question we can answer; clarify: dice/card "
                     "questions missing something essential; decline: nothing in it is dice/card odds; "
@@ -88,30 +88,30 @@ class RequestDecision(BaseModel):
                                                   "dice/card questions")
 
 
-class OfferScore(BaseModel):
+class OfferScore(LLMSchema):
     entry_id: int
     score: int = Field(description="0-5 fit for our task")
     reason: str
 
 
-class Ranking(BaseModel):
+class Ranking(LLMSchema):
     offers: list[OfferScore]
 
 
-class ReplyKind(BaseModel):
+class ReplyKind(LLMSchema):
     kind: Literal["result", "question", "decline", "other"]
     answer: str = Field(default="", description="if kind is question: our short answer, else empty")
     reason: str
 
 
-class Case(BaseModel):
+class Case(LLMSchema):
     label: str = Field(description="their case number or a short label")
     question: str = Field(description="their question, verbatim or nearly")
     spec: Spec
     claimed: str = Field(description="their claimed answer exactly as written, e.g. '7/36' or '0.1944'")
 
 
-class Cases(BaseModel):
+class Cases(LLMSchema):
     cases: list[Case]
 
 

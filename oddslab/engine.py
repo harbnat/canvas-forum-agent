@@ -45,6 +45,19 @@ MUTANTS = {
 }
 
 
+class LLMSchema(BaseModel):
+    """Every field is listed as required in the JSON schema sent to the model (nullable ones
+    stay nullable), so the structured-output schema has no optional properties; the API limits
+    how many a schema may have. Python defaults still apply when building objects in code."""
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        json_schema = handler(core_schema)
+        target = handler.resolve_ref_schema(json_schema)
+        target["required"] = list(target.get("properties", {}))
+        return json_schema
+
+
 class SpecError(ValueError):
     """The question is outside what the engine supports, or is malformed."""
 
@@ -52,7 +65,7 @@ class SpecError(ValueError):
 # --------------------------------------------------------------------- spec
 
 
-class DiceGroup(BaseModel):
+class DiceGroup(LLMSchema):
     count: int = Field(description="number of dice of this kind, 1-10")
     sides: int = Field(description="faces per die, 2-100")
     reroll_once: list[int] = Field(default_factory=list,
@@ -64,12 +77,12 @@ class DiceGroup(BaseModel):
                                 "the chain stops at three dice); -1 for 'keeps exploding'")
 
 
-class Keep(BaseModel):
+class Keep(LLMSchema):
     which: Literal["highest", "lowest"]
     n: int
 
 
-class Event(BaseModel):
+class Event(LLMSchema):
     kind: Literal["total", "all_equal", "face_count", "card_count", "rank_pattern", "suit_max"]
     op: Optional[Op] = Field(default=None, description="comparison for total/face_count/card_count/suit_max")
     value: Optional[int] = Field(default=None, description="threshold for the comparison")
@@ -84,7 +97,7 @@ class Event(BaseModel):
     pattern: Optional[RankPattern] = None
 
 
-class Spec(BaseModel):
+class Spec(LLMSchema):
     kind: Literal["dice", "cards", "unsupported"]
     question: Literal["probability", "expectation", "distribution", "expected_trials_until"] = "probability"
     dice: list[DiceGroup] = Field(default_factory=list)
