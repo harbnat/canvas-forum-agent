@@ -501,3 +501,11 @@ def test_reopened_request_is_answered_once_more_with_a_correction(env):
 def test_control_line_cases_from_the_forum(html, state):
     from agent.safety import control_state
     assert control_state(html) == state
+
+
+def test_cli_module_imports_and_status_runs(tmp_path, monkeypatch, capsys):
+    import oddslab.__main__ as cli
+    monkeypatch.setenv("AGENT_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("AGENT_LOG_DIR", str(tmp_path / "logs"))
+    assert cli.main(["status"]) == 0
+    assert "cycles: 0 real" in capsys.readouterr().out

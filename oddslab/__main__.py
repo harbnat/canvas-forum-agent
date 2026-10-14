@@ -208,7 +208,8 @@ def _status(cfg, store: Store) -> int:
     print(f"cycles: {len(real)} real ({sum(1 for c in real if c['outcome'] == 'error')} errored, "
           f"{sum(1 for c in real if c['outcome'] == 'ok')} ok, "
           f"first {_fmt(min((c['started_at'] for c in real), default=None))})")
-    print(f"posts: {store.db.execute(\"SELECT COUNT(*) FROM writes WHERE status='verified'\").fetchone()[0]} verified")
+    verified = store.db.execute("SELECT COUNT(*) FROM writes WHERE status='verified'").fetchone()[0]
+    print(f"posts: {verified} verified")
     print("\nRecent cycles:")
     for c in store.cycles(15):
         print(f"  {_fmt(c['started_at'])}  {c['trigger'] or '-':16} {c['outcome'] or 'running?':10} "
