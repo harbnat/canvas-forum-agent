@@ -486,3 +486,18 @@ def test_reopened_request_is_answered_once_more_with_a_correction(env):
     env["clock"]["offset"] += 3 * 3600
     env["make"]().run_cycle()                       # never answered a third time
     assert len([e for e in env["canvas"].mine() if e["parent_id"] == req]) == 2
+
+
+@pytest.mark.parametrize("html,state", [
+    ("<p>COURSE-TEAM CONTROL: RUNNING</p><p>Homework 4</p>", "RUNNING"),
+    ("<p>COURSE-TEAM CONTROL: PAUSED</p>", "PAUSED"),
+    ("", "PAUSED"),
+    ("<p>Homework 4</p><p>COURSE-TEAM CONTROL: RUNNING</p>", "PAUSED"),
+    ("<p>COURSE-TEAM CONTROL: <strong>RUNNING</strong></p>", "RUNNING"),
+    ("<p>&nbsp;COURSE-TEAM CONTROL: RUNNING&nbsp;</p>", "RUNNING"),
+    ("<p>COURSE-TEAM CONTROL: RUNNING LATER</p>", "PAUSED"),
+    ("<p>COURSE-TEAM CONTROL: PAUSED<br>COURSE-TEAM CONTROL: RUNNING</p>", "PAUSED"),
+])
+def test_control_line_cases_from_the_forum(html, state):
+    from agent.safety import control_state
+    assert control_state(html) == state

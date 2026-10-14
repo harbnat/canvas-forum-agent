@@ -11,7 +11,7 @@ import difflib
 import html
 import re
 
-CONTROL_RE = re.compile(r"COURSE-TEAM\s+CONTROL:\s*(RUNNING|PAUSED)\b", re.IGNORECASE)
+CONTROL_RE = re.compile(r"\s*COURSE-TEAM\s+CONTROL:\s*(RUNNING|PAUSED)\s*", re.IGNORECASE)
 
 MIN_BODY_CHARS = 80
 MAX_BODY_CHARS = 2500
@@ -58,7 +58,7 @@ def control_state(topic_message_html: str | None) -> str:
     """
     text = html_to_text(topic_message_html)
     first_line = text.splitlines()[0] if text else ""
-    m = CONTROL_RE.search(first_line)
+    m = CONTROL_RE.fullmatch(first_line)  # the whole line, so "RUNNING LATER" is not RUNNING
     if not m:
         return "PAUSED"
     return m.group(1).upper()

@@ -32,7 +32,7 @@ from .store import Store
 log = logging.getLogger(__name__)
 
 MAX_WRITES_PER_HOUR = 3           # course rule: per student, across all agents and discussions
-MAX_WRITES_PER_CYCLE = 2
+MAX_WRITES_PER_CYCLE = 3           # the rolling-hour limit above is what binds
 REQUEST_HOURS = 48
 CORRECTION_HOURS = 24
 MIN_SCORE = 3
