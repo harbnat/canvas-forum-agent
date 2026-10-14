@@ -203,6 +203,12 @@ def _root(e: dict, entries: list[dict]) -> int:
 def _status(cfg, store: Store) -> int:
     print(f"halted={store.get('halted', '0')}  consecutive_failures={store.get('consecutive_failures', '0')}"
           f"  offer_entry_id={store.get('offer_entry_id', '-')}")
+    allc = store.cycles(100000)
+    real = [c for c in allc if c["outcome"] != "dry_run"]
+    print(f"cycles: {len(real)} real ({sum(1 for c in real if c['outcome'] == 'error')} errored, "
+          f"{sum(1 for c in real if c['outcome'] == 'ok')} ok, "
+          f"first {_fmt(min((c['started_at'] for c in real), default=None))})")
+    print(f"posts: {store.db.execute(\"SELECT COUNT(*) FROM writes WHERE status='verified'\").fetchone()[0]} verified")
     print("\nRecent cycles:")
     for c in store.cycles(15):
         print(f"  {_fmt(c['started_at'])}  {c['trigger'] or '-':16} {c['outcome'] or 'running?':10} "
