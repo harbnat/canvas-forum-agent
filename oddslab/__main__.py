@@ -52,7 +52,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--min-gap-hours", type=float, default=0.0,
                      help="skip if the last real cycle started less than this many hours ago")
     sub.add_parser("check", help="read-only check of the HW4 forum")
-    sub.add_parser("thread", help="read-only: print our offer thread")
+    th = sub.add_parser("thread", help="read-only: print our offer thread (or the thread rooted at ROOT)")
+    th.add_argument("root", type=int, nargs="?")
     sub.add_parser("status", help="show recent cycles, posts and hires")
     sub.add_parser("evidence", help="print a markdown evidence summary")
     sub.add_parser("reset", help="clear the halt flag")
@@ -121,7 +122,7 @@ def _dispatch(args, cfg, other_topics: list[int], store: Store, events: EventLog
     if args.cmd == "check":
         return _check(cfg, canvas)
     if args.cmd == "thread":
-        return _thread(canvas, store)
+        return _thread(canvas, store, args.root)
 
     if args.min_gap_hours > 0 and not args.dry_run:
         last = store.last_real_cycle_start()
@@ -178,8 +179,8 @@ def _check(cfg, canvas) -> int:
     return 0
 
 
-def _thread(canvas, store: Store) -> int:
-    offer = store.get("offer_entry_id")
+def _thread(canvas, store: Store, root: int | None = None) -> int:
+    offer = root or store.get("offer_entry_id")
     if not offer:
         print("no offer posted yet")
         return 0

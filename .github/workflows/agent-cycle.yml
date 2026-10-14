@@ -109,7 +109,7 @@ jobs:
             dry-run) python -m oddslab run --dry-run ;;
             check)   python -m oddslab check ;;
             status)  python -m oddslab status ;;
-            thread)  python -m oddslab thread ;;
+            thread)  python -m oddslab thread $ENTRY_IDS ;;  # optional root entry id
             reopen)  python -m oddslab reopen $ENTRY_IDS ;;  # argparse accepts integers only
             reset)   python -m oddslab reset ;;
           esac
